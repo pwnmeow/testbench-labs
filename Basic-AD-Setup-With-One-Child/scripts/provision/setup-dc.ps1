@@ -11,14 +11,14 @@ param(
 $ErrorActionPreference = "Stop"
 $SafeModePassword = ConvertTo-SecureString "Akatsuki123!" -AsPlainText -Force
 
-# User passwords - varied for realism, with one shared pair for password spraying practice
+# User passwords - matching README.md documentation
 $Passwords = @{
     "itachi"     = ConvertTo-SecureString "Akatsuki123!" -AsPlainText -Force    # Domain Admin
-    "pain"       = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Shares with kisame (password spray)
-    "kisame"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Shares with pain (password spray)
-    "deidara"    = ConvertTo-SecureString "Explosion789!" -AsPlainText -Force   # Unique
-    "sasori"     = ConvertTo-SecureString "Puppet456!" -AsPlainText -Force      # Unique
-    "orochimaru" = ConvertTo-SecureString "Snake2024!" -AsPlainText -Force      # Attacker starting point
+    "pain"       = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Local admin on WS01
+    "kisame"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "deidara"    = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "sasori"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "orochimaru" = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Attacker starting point (low priv)
 }
 
 Write-Host "========================================" -ForegroundColor Cyan
@@ -164,14 +164,14 @@ $postRebootScript = @'
 $ErrorActionPreference = "Stop"
 $DomainName = "akatsuki.local"
 
-# User passwords - varied for realism, with one shared pair for password spraying practice
+# User passwords - matching README.md documentation
 $Passwords = @{
     "itachi"     = ConvertTo-SecureString "Akatsuki123!" -AsPlainText -Force    # Domain Admin
-    "pain"       = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Shares with kisame (password spray)
-    "kisame"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Shares with pain (password spray)
-    "deidara"    = ConvertTo-SecureString "Explosion789!" -AsPlainText -Force   # Unique
-    "sasori"     = ConvertTo-SecureString "Puppet456!" -AsPlainText -Force      # Unique
-    "orochimaru" = ConvertTo-SecureString "Snake2024!" -AsPlainText -Force      # Attacker starting point
+    "pain"       = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Local admin on WS01
+    "kisame"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "deidara"    = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "sasori"     = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Standard user
+    "orochimaru" = ConvertTo-SecureString "Password123!" -AsPlainText -Force    # Attacker starting point (low priv)
 }
 
 Start-Sleep -Seconds 60  # Wait for AD to be fully operational

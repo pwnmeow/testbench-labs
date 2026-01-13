@@ -83,6 +83,270 @@ ISO_OPTIONS = {
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
+
+def check_vmware_network() -> bool:
+    """Check if VMware vmnet8 (NAT) network is configured."""
+    try:
+        # Check for vmnet8 adapter in ipconfig output
+        result = subprocess.run(
+            ["ipconfig"],
+            capture_output=True,
+            text=True,
+            shell=True
+        )
+        return "VMnet8" in result.stdout
+    except Exception:
+        return False
+
+
+def configure_vmware_network() -> bool:
+    """Automatically configure VMware virtual networks by restoring defaults."""
+    if RICH_AVAILABLE:
+        console.print("[cyan]Configuring VMware virtual networks...[/cyan]")
+    else:
+        print("Configuring VMware virtual networks...")
+
+    # Find VMware Workstation installation
+    vmware_paths = [
+        Path(r"C:\Program Files (x86)\VMware\VMware Workstation"),
+        Path(r"C:\Program Files\VMware\VMware Workstation"),
+    ]
+
+    vmnetcfg_exe = None
+    for vmware_path in vmware_paths:
+        # Try different possible names for the network config utility
+        for exe_name in ["vmnetcfg.exe", "vmware-netcfg.exe"]:
+            candidate = vmware_path / exe_name
+            if candidate.exists():
+                vmnetcfg_exe = candidate
+                break
+        if vmnetcfg_exe:
+            break
+
+    if vmnetcfg_exe:
+        # Try running the network config utility
+        try:
+            if RICH_AVAILABLE:
+                console.print(f"[dim]Running {vmnetcfg_exe.name}...[/dim]")
+            result = subprocess.run(
+                [str(vmnetcfg_exe), "-r"],  # -r flag restores defaults
+                capture_output=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                if RICH_AVAILABLE:
+                    console.print("[green]VMware networks configured successfully![/green]")
+                else:
+                    print("VMware networks configured successfully!")
+                return True
+        except Exception as e:
+            if RICH_AVAILABLE:
+                console.print(f"[yellow]Network config utility failed: {e}[/yellow]")
+
+    # Alternative: Use vnetlib to configure networks
+    vnetlib_paths = [
+        Path(r"C:\Program Files (x86)\VMware\VMware Workstation\vnetlib64.exe"),
+        Path(r"C:\Program Files\VMware\VMware Workstation\vnetlib64.exe"),
+        Path(r"C:\Program Files (x86)\VMware\VMware Workstation\vnetlib.exe"),
+    ]
+
+    vnetlib_exe = None
+    for path in vnetlib_paths:
+        if path.exists():
+            vnetlib_exe = path
+            break
+
+    if vnetlib_exe:
+        try:
+            if RICH_AVAILABLE:
+                console.print("[dim]Configuring vmnet8 NAT network...[/dim]")
+
+            # Stop networking services first
+            subprocess.run(["net", "stop", "VMnetDHCP"], capture_output=True, shell=True)
+            subprocess.run(["net", "stop", "VMware NAT Service"], capture_output=True, shell=True)
+
+            # Configure vmnet8 as NAT
+            commands = [
+                [str(vnetlib_exe), "--", "add", "adapter", "vmnet8"],
+                [str(vnetlib_exe), "--", "set", "vnet", "vmnet8", "mask", "255.255.255.0"],
+                [str(vnetlib_exe), "--", "set", "vnet", "vmnet8", "addr", "192.168.56.0"],
+                [str(vnetlib_exe), "--", "set", "adapter", "vmnet8", "addr", "192.168.56.1"],
+                [str(vnetlib_exe), "--", "add", "nat", "vmnet8"],
+                [str(vnetlib_exe), "--", "add", "dhcp", "vmnet8"],
+                [str(vnetlib_exe), "--", "update", "dhcp", "vmnet8"],
+                [str(vnetlib_exe), "--", "update", "nat", "vmnet8"],
+            ]
+
+            for cmd in commands:
+                subprocess.run(cmd, capture_output=True, timeout=30)
+
+            # Restart services
+            subprocess.run(["net", "start", "VMnetDHCP"], capture_output=True, shell=True)
+            subprocess.run(["net", "start", "VMware NAT Service"], capture_output=True, shell=True)
+
+            if RICH_AVAILABLE:
+                console.print("[green]VMware vmnet8 configured![/green]")
+            else:
+                print("VMware vmnet8 configured!")
+            return True
+
+        except Exception as e:
+            if RICH_AVAILABLE:
+                console.print(f"[yellow]vnetlib configuration failed: {e}[/yellow]")
+
+    # If all automatic methods fail, provide manual instructions
+    if RICH_AVAILABLE:
+        console.print("\n[yellow]Automatic VMware network configuration failed.[/yellow]")
+        console.print("[bold]Please configure manually:[/bold]")
+        console.print("  1. Open VMware Workstation as Administrator")
+        console.print("  2. Go to Edit → Virtual Network Editor")
+        console.print("  3. Click 'Restore Defaults' (requires admin)")
+        console.print("  4. Click Apply and OK")
+        console.print("\n[dim]This creates vmnet8 (NAT) which Packer needs.[/dim]")
+        Prompt.ask("\nPress Enter after configuring VMware networking")
+    else:
+        print("\nAutomatic VMware network configuration failed.")
+        print("Please configure manually:")
+        print("  1. Open VMware Workstation as Administrator")
+        print("  2. Go to Edit → Virtual Network Editor")
+        print("  3. Click 'Restore Defaults' (requires admin)")
+        print("  4. Click Apply and OK")
+        input("\nPress Enter after configuring VMware networking")
+
+    # Re-check after manual configuration
+    return check_vmware_network()
+
+
+def check_packer_plugins() -> bool:
+    """Check if required Packer plugins are installed."""
+    plugin_dir = Path.home() / "AppData" / "Roaming" / "packer.d" / "plugins"
+
+    # Check for vmware and vagrant plugins
+    vmware_installed = False
+    vagrant_installed = False
+
+    if plugin_dir.exists():
+        for item in plugin_dir.rglob("*"):
+            if "vmware" in item.name.lower():
+                vmware_installed = True
+            if "vagrant" in item.name.lower():
+                vagrant_installed = True
+
+    return vmware_installed and vagrant_installed
+
+
+def install_packer_plugins() -> bool:
+    """Install required Packer plugins using packer init."""
+    if RICH_AVAILABLE:
+        console.print("[cyan]Installing Packer plugins...[/cyan]")
+    else:
+        print("Installing Packer plugins...")
+
+    success = True
+    for hcl_file in ["windows-server-2022.pkr.hcl", "windows-11.pkr.hcl"]:
+        hcl_path = PACKER_DIR / hcl_file
+        if hcl_path.exists():
+            if RICH_AVAILABLE:
+                console.print(f"[dim]Running packer init for {hcl_file}...[/dim]")
+            result = subprocess.run(
+                ["packer", "init", str(hcl_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(PACKER_DIR)
+            )
+            if result.returncode != 0:
+                if RICH_AVAILABLE:
+                    console.print(f"[red]Failed to init {hcl_file}: {result.stderr}[/red]")
+                else:
+                    print(f"Failed to init {hcl_file}: {result.stderr}")
+                success = False
+            else:
+                if RICH_AVAILABLE:
+                    console.print(f"[green]Plugins installed for {hcl_file}[/green]")
+
+    return success
+
+
+def preflight_checks() -> bool:
+    """Run all pre-flight checks before building. Returns True if all checks pass."""
+    all_passed = True
+
+    if RICH_AVAILABLE:
+        console.print("\n[bold cyan]Running pre-flight checks...[/bold cyan]\n")
+    else:
+        print("\nRunning pre-flight checks...\n")
+
+    # Check 1: Packer installed
+    if RICH_AVAILABLE:
+        console.print("[dim]Checking Packer installation...[/dim]")
+    if not shutil.which("packer"):
+        if RICH_AVAILABLE:
+            console.print("[red]✗ Packer not found![/red]")
+            console.print("  Visit: https://developer.hashicorp.com/packer/downloads")
+        else:
+            print("✗ Packer not found!")
+            print("  Visit: https://developer.hashicorp.com/packer/downloads")
+        return False
+    if RICH_AVAILABLE:
+        console.print("[green]✓ Packer installed[/green]")
+    else:
+        print("✓ Packer installed")
+
+    # Check 2: Packer plugins
+    if RICH_AVAILABLE:
+        console.print("[dim]Checking Packer plugins...[/dim]")
+    if not check_packer_plugins():
+        if RICH_AVAILABLE:
+            console.print("[yellow]⚠ Packer plugins not installed, installing now...[/yellow]")
+        else:
+            print("⚠ Packer plugins not installed, installing now...")
+        if not install_packer_plugins():
+            if RICH_AVAILABLE:
+                console.print("[red]✗ Failed to install Packer plugins[/red]")
+            else:
+                print("✗ Failed to install Packer plugins")
+            all_passed = False
+        else:
+            if RICH_AVAILABLE:
+                console.print("[green]✓ Packer plugins installed[/green]")
+            else:
+                print("✓ Packer plugins installed")
+    else:
+        if RICH_AVAILABLE:
+            console.print("[green]✓ Packer plugins installed[/green]")
+        else:
+            print("✓ Packer plugins installed")
+
+    # Check 3: VMware Workstation installed
+    if RICH_AVAILABLE:
+        console.print("[dim]Checking VMware Workstation...[/dim]")
+    vmware_installed = any([
+        Path(r"C:\Program Files (x86)\VMware\VMware Workstation\vmware.exe").exists(),
+        Path(r"C:\Program Files\VMware\VMware Workstation\vmware.exe").exists(),
+        shutil.which("vmware"),
+    ])
+    if not vmware_installed:
+        if RICH_AVAILABLE:
+            console.print("[red]✗ VMware Workstation not found![/red]")
+            console.print("  Please install VMware Workstation Pro")
+        else:
+            print("✗ VMware Workstation not found!")
+            print("  Please install VMware Workstation Pro")
+        all_passed = False
+    else:
+        if RICH_AVAILABLE:
+            console.print("[green]✓ VMware Workstation installed[/green]")
+        else:
+            print("✓ VMware Workstation installed")
+
+    if all_passed:
+        if RICH_AVAILABLE:
+            console.print("\n[bold green]All pre-flight checks passed![/bold green]\n")
+        else:
+            print("\nAll pre-flight checks passed!\n")
+
+    return all_passed
+
 def print_banner():
     banner = """
     ___    __         __             __   _    __          __
@@ -503,14 +767,12 @@ def menu_build_boxes():
     else:
         print("\n=== Build Vagrant Boxes (Packer) ===\n")
 
-    # Check for Packer
-    if not shutil.which("packer"):
+    # Run pre-flight checks (Packer, plugins, VMware networking)
+    if not preflight_checks():
         if RICH_AVAILABLE:
-            console.print("[red]Packer not found! Please install Packer first.[/red]")
-            console.print("Visit: https://developer.hashicorp.com/packer/downloads")
+            console.print("[red]Pre-flight checks failed. Please fix the issues above.[/red]")
         else:
-            print("Packer not found! Please install Packer first.")
-            print("Visit: https://developer.hashicorp.com/packer/downloads")
+            print("Pre-flight checks failed. Please fix the issues above.")
         input("\nPress Enter to continue...")
         return
 
@@ -550,57 +812,85 @@ def menu_build_boxes():
         if input("Proceed? [Y/n]: ").lower() == 'n':
             return
 
-    # Build Server box
-    if RICH_AVAILABLE:
-        console.print("\n[bold]Building Windows Server box...[/bold]")
-    else:
-        print("\nBuilding Windows Server box...")
-
     os.chdir(PACKER_DIR)
-
     env = os.environ.copy()
-    env["ISO_PATH"] = str(server_iso)
     env["OUTPUT_DIR"] = str(BOXES_DIR)
 
-    result = subprocess.run(
-        ["packer", "build", "-var", f"iso_path={server_iso}", "windows-server-2022.pkr.hcl"],
-        env=env
-    )
-
-    if result.returncode != 0:
+    # Build Server box (skip if exists)
+    server_box = BOXES_DIR / "windows-server-2022.box"
+    if server_box.exists():
         if RICH_AVAILABLE:
-            console.print("[red]Server box build failed![/red]")
+            console.print(f"\n[green]✓ Server box already exists:[/green] {server_box.name}")
+            if not Confirm.ask("Rebuild server box?", default=False):
+                pass  # Skip
+            else:
+                server_box.unlink()  # Delete and rebuild
         else:
-            print("Server box build failed!")
-    else:
+            print(f"\n✓ Server box already exists: {server_box.name}")
+            if input("Rebuild? [y/N]: ").lower() != 'y':
+                pass  # Skip
+
+    if not server_box.exists():
         if RICH_AVAILABLE:
-            console.print("[green]Server box built successfully![/green]")
+            console.print("\n[bold]Building Windows Server box...[/bold]")
         else:
-            print("Server box built successfully!")
+            print("\nBuilding Windows Server box...")
 
-    # Build Client box
-    if RICH_AVAILABLE:
-        console.print("\n[bold]Building Windows 11 box...[/bold]")
-    else:
-        print("\nBuilding Windows 11 box...")
+        env["ISO_PATH"] = str(server_iso)
 
-    env["ISO_PATH"] = str(client_iso)
+        result = subprocess.run(
+            ["packer", "build", "-force", "-var", f"iso_path={server_iso}", "windows-server-2022.pkr.hcl"],
+            env=env
+        )
 
-    result = subprocess.run(
-        ["packer", "build", "-var", f"iso_path={client_iso}", "windows-11.pkr.hcl"],
-        env=env
-    )
+        if result.returncode != 0:
+            if RICH_AVAILABLE:
+                console.print("[red]Server box build failed![/red]")
+            else:
+                print("Server box build failed!")
+        else:
+            if RICH_AVAILABLE:
+                console.print("[green]Server box built successfully![/green]")
+            else:
+                print("Server box built successfully!")
 
-    if result.returncode != 0:
+    # Build Client box (skip if exists)
+    client_box = BOXES_DIR / "windows-11.box"
+    if client_box.exists():
         if RICH_AVAILABLE:
-            console.print("[red]Client box build failed![/red]")
+            console.print(f"\n[green]✓ Client box already exists:[/green] {client_box.name}")
+            if not Confirm.ask("Rebuild client box?", default=False):
+                pass  # Skip
+            else:
+                client_box.unlink()  # Delete and rebuild
         else:
-            print("Client box build failed!")
-    else:
+            print(f"\n✓ Client box already exists: {client_box.name}")
+            if input("Rebuild? [y/N]: ").lower() != 'y':
+                pass  # Skip
+
+    if not client_box.exists():
         if RICH_AVAILABLE:
-            console.print("[green]Client box built successfully![/green]")
+            console.print("\n[bold]Building Windows 11 box...[/bold]")
         else:
-            print("Client box built successfully!")
+            print("\nBuilding Windows 11 box...")
+
+        env["ISO_PATH"] = str(client_iso)
+
+        result = subprocess.run(
+            ["packer", "build", "-force", "-var", f"iso_path={client_iso}", "windows-11.pkr.hcl"],
+            env=env
+        )
+
+        if result.returncode != 0:
+            if RICH_AVAILABLE:
+                console.print("[red]Client box build failed![/red]")
+            else:
+                print("Client box build failed!")
+        else:
+            if RICH_AVAILABLE:
+                console.print("[green]Client box built successfully![/green]")
+            else:
+                print("Client box built successfully!")
 
     os.chdir(PROJECT_ROOT)
     input("\nPress Enter to continue...")

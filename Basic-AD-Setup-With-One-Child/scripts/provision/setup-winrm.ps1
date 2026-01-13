@@ -1,7 +1,7 @@
 # Setup WinRM for Vagrant/Packer communication
 # This script runs during first logon via autounattend.xml
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
 
 Write-Host "Configuring WinRM..."
 
@@ -16,8 +16,8 @@ winrm set winrm/config/service '@{AllowUnencrypted="true"}'
 winrm set winrm/config/service/auth '@{Basic="true"}'
 winrm set winrm/config/client/auth '@{Basic="true"}'
 
-# Configure firewall
-netsh advfirewall firewall add rule name="WinRM-HTTP" dir=in localport=5985 protocol=TCP action=allow
+# Disable firewall for lab environment
+netsh advfirewall set allprofiles state off
 
 # Set WinRM service to auto-start
 Set-Service -Name WinRM -StartupType Automatic
@@ -27,6 +27,6 @@ Restart-Service WinRM
 New-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" -Force | Out-Null
 
 # Set network profile to Private
-Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private
+Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
 
 Write-Host "WinRM configuration complete!"

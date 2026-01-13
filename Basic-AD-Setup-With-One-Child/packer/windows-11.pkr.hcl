@@ -24,7 +24,7 @@ variable "output_directory" {
 
 variable "vm_name" {
   type    = string
-  default = "windows-11"
+  default = "WS01"
 }
 
 variable "winrm_username" {
@@ -55,6 +55,10 @@ source "vmware-iso" "windows-11" {
 
   network_adapter_type = "e1000e"
   network              = "nat"
+
+  # Boot command - press keys to boot from CD and start install
+  boot_wait    = "5s"
+  boot_command = ["<spacebar><wait><spacebar><wait><spacebar><wait5><enter><wait><enter>"]
 
   # Windows 11 requires TPM - using workaround via registry
   vmx_data = {
@@ -106,7 +110,7 @@ build {
   }
 
   post-processor "vagrant" {
-    output               = "${var.output_directory}/${var.vm_name}.box"
+    output               = "${var.output_directory}/windows-11.box"
     vagrantfile_template = "vagrantfile-windows.template"
   }
 }

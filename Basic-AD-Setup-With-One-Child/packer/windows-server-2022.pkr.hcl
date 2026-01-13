@@ -24,7 +24,7 @@ variable "output_directory" {
 
 variable "vm_name" {
   type    = string
-  default = "windows-server-2022"
+  default = "DC01"
 }
 
 variable "winrm_username" {
@@ -55,6 +55,15 @@ source "vmware-iso" "windows-server-2022" {
 
   network_adapter_type = "e1000e"
   network              = "nat"
+
+  # Boot command - press keys to boot from CD and start install
+  # Longer wait for BIOS, then press space multiple times for "Press any key" prompt
+  boot_wait    = "10s"
+  boot_command = [
+    "<spacebar><spacebar><spacebar><wait3>",
+    "<spacebar><spacebar><spacebar><wait3>",
+    "<enter><wait><enter>"
+  ]
 
   floppy_files = [
     "../answer_files/server2022/autounattend.xml",
@@ -102,7 +111,7 @@ build {
   }
 
   post-processor "vagrant" {
-    output               = "${var.output_directory}/${var.vm_name}.box"
+    output               = "${var.output_directory}/windows-server-2022.box"
     vagrantfile_template = "vagrantfile-windows.template"
   }
 }
