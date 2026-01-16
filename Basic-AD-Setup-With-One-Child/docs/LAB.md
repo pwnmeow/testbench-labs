@@ -31,7 +31,7 @@ vagrant up ws02
 ```
                          ┌──────────────────────────────────────────────┐
                          │           AKATSUKI.LOCAL DOMAIN              │
-                         │              192.168.56.0/24                 │
+                         │              10.10.12.0/24                 │
                          │         (Isolated Private Network)           │
                          └──────────────────────────────────────────────┘
                                             │
@@ -40,7 +40,7 @@ vagrant up ws02
             ▼                               ▼                           ▼
 ┌───────────────────────┐     ┌───────────────────────┐     ┌───────────────────────┐
 │        DC01           │     │        WS01           │     │        WS02           │
-│   192.168.56.10       │     │   192.168.56.11       │     │   192.168.56.12       │
+│   10.10.12.10       │     │   10.10.12.11       │     │   10.10.12.12       │
 │                       │     │                       │     │                       │
 │ Windows Server 2022   │     │    Windows 11         │     │    Windows 11         │
 │ Domain Controller     │     │    Workstation        │     │    Workstation        │
@@ -55,7 +55,7 @@ vagrant up ws02
                               ┌─────────┴─────────┐
                               │   Your Host /     │
                               │   Kali Attack Box │
-                              │  192.168.56.100   │
+                              │  10.10.12.100   │
                               └───────────────────┘
 ```
 
@@ -66,18 +66,18 @@ vagrant up ws02
 | Setting | Value |
 |---------|-------|
 | Network Name | `akatsuki_lab` |
-| Subnet | `192.168.56.0/24` |
+| Subnet | `10.10.12.0/24` |
 | Netmask | `255.255.255.0` |
-| Gateway | `192.168.56.1` |
-| DNS Server | `192.168.56.10` (DC01) |
+| Gateway | `10.10.12.1` |
+| DNS Server | `10.10.12.10` (DC01) |
 
 ### Machine IPs
 
 | Machine | IP Address | RDP Port (Host) | WinRM Port (Host) |
 |---------|------------|-----------------|-------------------|
-| DC01 | 192.168.56.10 | 33890 | 59850 |
-| WS01 | 192.168.56.11 | 33891 | 59851 |
-| WS02 | 192.168.56.12 | 33892 | 59852 |
+| DC01 | 10.10.12.10 | 33890 | 59850 |
+| WS01 | 10.10.12.11 | 33891 | 59851 |
+| WS02 | 10.10.12.12 | 33892 | 59852 |
 
 ---
 
@@ -204,16 +204,16 @@ rdesktop localhost:33892 -u AKATSUKI\\orochimaru -p 'Snake2024!'
 **WinRM (PowerShell):**
 ```bash
 # Using Evil-WinRM from Kali
-evil-winrm -i 192.168.56.10 -u Administrator -p vagrant
-evil-winrm -i 192.168.56.11 -u pain -p 'Password123!'
+evil-winrm -i 10.10.12.10 -u Administrator -p vagrant
+evil-winrm -i 10.10.12.11 -u pain -p 'Password123!'
 
 # Using PowerShell from Windows
-Enter-PSSession -ComputerName 192.168.56.10 -Credential (Get-Credential)
+Enter-PSSession -ComputerName 10.10.12.10 -Credential (Get-Credential)
 ```
 
 ### From Kali/Attack Machine
 
-Add Kali to the same network (192.168.56.0/24):
+Add Kali to the same network (10.10.12.0/24):
 
 **Option 1: Vagrant Kali box** (uncomment in Vagrantfile)
 ```ruby
@@ -223,8 +223,8 @@ config.vm.define "kali" ...
 
 **Option 2: Existing Kali VM**
 ```bash
-# Add network adapter with IP 192.168.56.100
-# Set DNS to 192.168.56.10
+# Add network adapter with IP 10.10.12.100
+# Set DNS to 10.10.12.10
 ```
 
 **Option 3: Docker**
@@ -242,7 +242,7 @@ The lab is ready for this attack out of the box.
 
 ```bash
 # From Kali
-crackmapexec smb 192.168.56.10 -u users.txt -p 'Password123!' --continue-on-success
+crackmapexec smb 10.10.12.10 -u users.txt -p 'Password123!' --continue-on-success
 
 # Expected: pain and kisame will authenticate
 ```
@@ -258,7 +258,7 @@ Set-ADUser -Identity "svc_sql" -ServicePrincipalNames @{Add="MSSQLSvc/dc01.akats
 
 ```bash
 # From Kali - Attack
-GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 192.168.56.10 -request
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request
 ```
 
 ### Scenario 3: LSASS Credential Dump (Requires Setup)
@@ -292,13 +292,13 @@ Get-ADUser -Filter * | Select SamAccountName
 
 ```powershell
 # Check DNS
-nslookup akatsuki.local 192.168.56.10
+nslookup akatsuki.local 10.10.12.10
 
 # Check connectivity
-Test-Connection 192.168.56.10
+Test-Connection 10.10.12.10
 
 # Check firewall
-Test-NetConnection 192.168.56.10 -Port 389
+Test-NetConnection 10.10.12.10 -Port 389
 ```
 
 ### WinRM Not Working
@@ -320,7 +320,7 @@ vagrant ssh dc01 -c "ipconfig"
 vagrant ssh ws01 -c "ipconfig"
 
 # Ping between VMs
-vagrant ssh ws01 -c "ping 192.168.56.10"
+vagrant ssh ws01 -c "ping 10.10.12.10"
 ```
 
 ---
@@ -368,7 +368,7 @@ Add to `Vagrantfile`:
 config.vm.define "ws03", autostart: false do |ws|
   ws.vm.box = "akatsuki-lab/windows-11"
   ws.vm.hostname = "WS03"
-  ws.vm.network "private_network", ip: "192.168.56.13", netmask: "255.255.255.0"
+  ws.vm.network "private_network", ip: "10.10.12.13", netmask: "255.255.255.0"
   # ... rest of config
 end
 ```
@@ -444,7 +444,7 @@ This lab is intentionally vulnerable. **DO NOT**:
 - Connect to production networks
 - Use on shared/public networks
 
-The private network (`192.168.56.0/24`) should only be accessible from your host machine.
+The private network (`10.10.12.0/24`) should only be accessible from your host machine.
 
 ---
 

