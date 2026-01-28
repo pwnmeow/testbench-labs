@@ -2118,6 +2118,9 @@ New-ADUser -Name "svc_web" `
     -Enabled $true `
     -PasswordNeverExpires $true
 
+# Set SPN (REQUIRED for S4U attacks to work)
+Set-ADUser -Identity "svc_web" -ServicePrincipalNames @{Add='HTTP/websvc.akatsuki.local'}
+
 # Set constrained delegation to CIFS on DC
 Set-ADUser -Identity "svc_web" -Add @{'msDS-AllowedToDelegateTo'=@('cifs/dc01.akatsuki.local')}
 
@@ -2125,7 +2128,7 @@ Set-ADUser -Identity "svc_web" -Add @{'msDS-AllowedToDelegateTo'=@('cifs/dc01.ak
 Set-ADAccountControl -Identity "svc_web" -TrustedToAuthForDelegation $true
 
 # Verify setup
-Get-ADUser svc_web -Properties msDS-AllowedToDelegateTo, TrustedToAuthForDelegation
+Get-ADUser svc_web -Properties ServicePrincipalNames, msDS-AllowedToDelegateTo, TrustedToAuthForDelegation
 
 Write-Host "svc_web can delegate to CIFS on DC01 with Protocol Transition" -ForegroundColor Yellow
 ```
