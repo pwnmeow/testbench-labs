@@ -31,9 +31,9 @@ A fully automated Active Directory lab environment for security testing, penetra
            │  10.10.12.11  │ │ Network │ │  10.10.12.12  │
            │   Windows 11    │ │         │ │   Windows 11    │
            │ Local Admin:    │ │         │ │ Local Admin:    │
-           │     pain        │ │         │ │    itachi (DA)  │
-           │                 │ │         │ │ (creds cached)  │
-           │ Initial Target  │ │         │ │ Lateral Target  │
+           │     pain        │ │         │ │    (none)       │
+           │                 │ │         │ │                 │
+           │ Initial Target  │ │         │ │ CLEAN STATE     │
            └─────────────────┘ └─────────┘ └─────────────────┘
 ```
 
@@ -116,16 +116,19 @@ vagrant up ws02      # Start Workstation 2
 
 ```bash
 # From host machine
-# DC01
+# DC01 (as Domain Admin)
 rdesktop 127.0.0.1:33890
 # or
 xfreerdp /v:127.0.0.1:33890 /u:AKATSUKI\\itachi /p:Akatsuki123!
 
-# WS01
-xfreerdp /v:127.0.0.1:33891 /u:AKATSUKI\\orochimaru /p:Password123!
+# WS01 (as local admin)
+xfreerdp /v:127.0.0.1:33891 /u:AKATSUKI\\pain /p:'Password123!'
 
-# WS02
-xfreerdp /v:127.0.0.1:33892 /u:AKATSUKI\\itachi /p:Akatsuki123!
+# WS01 (as low-priv attacker starting point)
+xfreerdp /v:127.0.0.1:33891 /u:AKATSUKI\\orochimaru /p:'Snake2024!'
+
+# WS02 (as standard user)
+xfreerdp /v:127.0.0.1:33892 /u:AKATSUKI\\orochimaru /p:'Snake2024!'
 ```
 
 ---
@@ -137,11 +140,19 @@ xfreerdp /v:127.0.0.1:33892 /u:AKATSUKI\\itachi /p:Akatsuki123!
 | Username | Full Name | Role | Password | Notes |
 |----------|-----------|------|----------|-------|
 | `itachi` | Itachi Uchiha | **Domain Admin** | `Akatsuki123!` | Full domain control |
-| `pain` | Nagato Uzumaki | Domain User | `Password123!` | Local admin on WS01 |
-| `kisame` | Kisame Hoshigaki | Domain User | `Password123!` | Standard user |
-| `deidara` | Deidara | Domain User | `Password123!` | Standard user |
-| `sasori` | Sasori | Domain User | `Password123!` | Standard user |
-| `orochimaru` | Orochimaru | **Low Privilege** | `Password123!` | Ideal starting point |
+| `pain` | Nagato Uzumaki | Domain User | `Password123!` | Local admin on WS01, shares password with kisame |
+| `kisame` | Kisame Hoshigaki | Domain User | `Password123!` | **Shares password with pain** (password spraying) |
+| `deidara` | Deidara | Domain User | `Explosion789!` | Unique password |
+| `sasori` | Sasori | Domain User | `Puppet456!` | Unique password |
+| `orochimaru` | Orochimaru | **Low Privilege** | `Snake2024!` | Attacker starting point |
+
+### Password Strategy
+
+- **itachi**: Strong unique password (Domain Admin) - `Akatsuki123!`
+- **pain & kisame**: Share `Password123!` - enables **password spraying** practice
+- **deidara**: Unique password - `Explosion789!`
+- **sasori**: Unique password - `Puppet456!`
+- **orochimaru**: Known low-privilege starting point - `Snake2024!`
 
 ### Local Accounts
 
@@ -155,7 +166,7 @@ xfreerdp /v:127.0.0.1:33892 /u:AKATSUKI\\itachi /p:Akatsuki123!
 | Machine | User with Local Admin |
 |---------|----------------------|
 | WS01 | `AKATSUKI\pain` |
-| WS02 | `AKATSUKI\itachi` (Domain Admin) |
+| WS02 | None (clean state) |
 
 ---
 
@@ -302,10 +313,13 @@ Enter-PSSession -ComputerName WS02 -Credential (Get-Credential)
 # From Kali/Attack machine
 
 # CrackMapExec enumeration
-crackmapexec smb 10.10.12.10-12 -u orochimaru -p 'Password123!'
+crackmapexec smb 10.10.12.10-12 -u orochimaru -p 'Snake2024!'
+
+# Password spraying (pain & kisame share Password123!)
+crackmapexec smb 10.10.12.10 -u users.txt -p 'Password123!' --continue-on-success
 
 # PSExec with credentials
-psexec.py AKATSUKI/pain:'Password123!'@10.10.12.12
+psexec.py AKATSUKI/pain:'Password123!'@10.10.12.11
 
 # DCSync
 secretsdump.py AKATSUKI/itachi:'Akatsuki123!'@10.10.12.10
@@ -362,7 +376,15 @@ This lab is designed for **authorized security testing and educational purposes 
 
 ## Additional Resources
 
+### Lab Documentation
+
+- [docs/LAB.md](docs/LAB.md) - Complete lab setup & usage guide
 - [docs/AD-ATTACKS.md](docs/AD-ATTACKS.md) - Comprehensive AD attack reference
+- [docs/RELAY-ATTACKS.md](docs/RELAY-ATTACKS.md) - NTLM & IPv6 relay attacks
+- [docs/LATERAL-MOVEMENT.md](docs/LATERAL-MOVEMENT.md) - Lateral movement, file transfers, UAC bypass, pivoting
+
+### External References
+
 - [HackTricks AD Methodology](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology)
 - [PayloadsAllTheThings](https://github.com/swisskyrepo/PayloadsAllTheThings)
 - [The Hacker Recipes](https://www.thehacker.recipes/)
